@@ -69,11 +69,27 @@ struct vm_rg_struct *get_symrg_byid(struct mm_struct *mm, int rgid)
  */
 int __alloc(struct pcb_t *caller, int vmaid, int rgid, addr_t size, addr_t *alloc_addr)
 {
+
+  if (caller == NULL || caller->mm == NULL || alloc_addr == NULL || size == 0)
+    return -1;
+
+  if (rgid < 0 || rgid >= PAGING_MAX_SYMTBL_SZ) // kiểm tra idx
+    return -1;
+  
   /*Allocate at the toproof */
   pthread_mutex_lock(&mmvm_lock);
   struct vm_rg_struct rgnode;
+
   struct vm_area_struct *cur_vma = get_vma_by_num(caller->mm, vmaid);
+  if (cur_vma == NULL)
+  {
+    pthread_mutex_unlock(&mmvm_lock);
+    return -1;
+  }
+
+  struct sc_regs regs; //thanh ghi syscall
   int inc_sz=0;
+  int old_sbrk;
 
   if (get_free_vmrg_area(caller, vmaid, size, &rgnode) == 0)
   {
@@ -90,33 +106,48 @@ int __alloc(struct pcb_t *caller, int vmaid, int rgid, addr_t size, addr_t *allo
 
   /*Attempt to increate limit to get space */
 #ifdef MM64
-  inc_sz = (uint32_t)(size/(int)PAGING64_PAGESZ);
-  inc_sz = inc_sz + 1;
+  inc_sz = (uint32_t)(size/(int)PAGING64_PAGESZ); //tính số page cần cấp
+  //inc_sz = inc_sz + 1; //chưa rõ cộng thêm page làm cái gì??
 #else
   inc_sz = PAGING_PAGE_ALIGNSZ(size);
 #endif
-  int old_sbrk;
-  inc_sz = inc_sz + 1;
-
-  old_sbrk = cur_vma->sbrk;
+  //inc_sz = inc_sz + 1;// cộng thêm 1 page
+  inc_sz = PAGING64_PAGE_ALIGNSZ(size);
+  old_sbrk = cur_vma->sbrk;// lưu sbrk cũ, chuẩn bị nới
 
   /* TODO INCREASE THE LIMIT
    * SYSCALL 1 sys_memmap
    */
-  struct sc_regs regs;
-  regs.a1 = SYSMEM_INC_OP;
-  regs.a2 = vmaid;
+  regs.a1 = SYSMEM_INC_OP; //loại thao tác
+  regs.a2 = vmaid; // area index của một tiến trình nào đó
 #ifdef MM64
-  regs.a3 = size;
+  regs.a3 = inc_sz; // đã căn
 #else
   regs.a3 = PAGING_PAGE_ALIGNSZ(size);
 #endif  
-  _syscall(caller->krnl, caller->pid, 17, &regs); /* SYSCALL 17 sys_memmap */
-  /*Successful increase limit */
-  caller->mm->symrgtbl[rgid].rg_start = old_sbrk;
-  caller->mm->symrgtbl[rgid].rg_end = old_sbrk + size;
+  //_syscall(caller->krnl, caller->pid, 17, &regs); /* SYSCALL 17 sys_memmap */
+  //thằng syscall thiếu code
 
+  if (_syscall(caller->krnl, caller->pid, 17, &regs) != 0)
+  {
+    pthread_mutex_unlock(&mmvm_lock);
+    return -1;                   /* e.g. RAM has no free frame */
+  }
+
+  /*Successful increase limit */ 
+  caller->mm->symrgtbl[rgid].rg_start = old_sbrk;//region mới nhất à
+  caller->mm->symrgtbl[rgid].rg_end = old_sbrk + size;
   *alloc_addr = old_sbrk;
+
+  /*
+  if (size < inc_sz)
+  {
+    struct vm_rg_struct *tail = init_vm_rg(old_sbrk + size, old_sbrk + inc_sz);
+
+    if (tail != NULL)
+      enlist_vm_freerg_list(caller->mm, tail);
+  }
+*/
 
   pthread_mutex_unlock(&mmvm_lock);
   return 0;
@@ -132,6 +163,9 @@ int __alloc(struct pcb_t *caller, int vmaid, int rgid, addr_t size, addr_t *allo
  */
 int __free(struct pcb_t *caller, int vmaid, int rgid)
 {
+  if (caller == NULL || caller->mm == NULL)
+    return -1;
+
   pthread_mutex_lock(&mmvm_lock);
 
   if (rgid < 0 || rgid > PAGING_MAX_SYMTBL_SZ)
@@ -142,6 +176,11 @@ int __free(struct pcb_t *caller, int vmaid, int rgid)
 
   /* TODO: Manage the collect freed region to freerg_list */
   struct vm_rg_struct *rgnode = get_symrg_byid(caller->mm, rgid);
+  if (rgnode == NULL)
+  {
+    pthread_mutex_unlock(&mmvm_lock);
+    return -1;
+  }
 
   if (rgnode->rg_start == 0 && rgnode->rg_end == 0)
   {
@@ -149,6 +188,12 @@ int __free(struct pcb_t *caller, int vmaid, int rgid)
     return -1;
   }
   struct vm_rg_struct *freerg_node = malloc(sizeof(struct vm_rg_struct));
+  if (freerg_node == NULL)
+  {
+    pthread_mutex_unlock(&mmvm_lock);
+    return -1;
+  }
+  freerg_node->vmaid = rgnode->vmaid;
   freerg_node->rg_start = rgnode->rg_start;
   freerg_node->rg_end = rgnode->rg_end;
   freerg_node->rg_next = NULL;
@@ -329,15 +374,28 @@ int pg_setval(struct mm_struct *mm, int addr, BYTE value, struct pcb_t *caller)
  */
 int __read(struct pcb_t *caller, int vmaid, int rgid, addr_t offset, BYTE *data)
 {
-  struct vm_rg_struct *currg = get_symrg_byid(caller->mm, rgid);
 
-//struct vm_area_struct *cur_vma = get_vma_by_num(caller->krnl->mm, vmaid);
+  if (caller == NULL || caller->mm == NULL || data == NULL)
+    return -1;
+  
+  pthread_mutex_lock(&mmvm_lock);
+  struct vm_rg_struct *currg = get_symrg_byid(caller->mm, rgid);//bảng region
+
+  struct vm_area_struct *cur_vma = get_vma_by_num(caller->mm, vmaid);// lấy vùng
 
   /* TODO Invalid memory identify */
+  if (currg == NULL || cur_vma == NULL ||
+      currg->rg_end <= currg->rg_start ||
+      offset >= currg->rg_end - currg->rg_start)
+  {
+    pthread_mutex_unlock(&mmvm_lock);
+    return -1;
+  }
 
-  pg_getval(caller->krnl->mm, currg->rg_start + offset, data, caller);
+  int ret=pg_getval(caller->mm, currg->rg_start + offset, data, caller);
 
-  return 0;
+  pthread_mutex_unlock(&mmvm_lock);
+  return ret;
 }
 
 /*libread - PAGING-based read a region memory */
@@ -372,21 +430,26 @@ printf("%s:%d\n",__func__,__LINE__);
  */
 int __write(struct pcb_t *caller, int vmaid, int rgid, addr_t offset, BYTE value)
 {
+  if (caller == NULL || caller->mm == NULL)
+    return -1;
+
   pthread_mutex_lock(&mmvm_lock);
-  struct vm_rg_struct *currg = get_symrg_byid(caller->krnl->mm, rgid);
+  struct vm_rg_struct *currg = get_symrg_byid(caller->mm, rgid);
 
-  struct vm_area_struct *cur_vma = get_vma_by_num(caller->krnl->mm, vmaid);
+  struct vm_area_struct *cur_vma = get_vma_by_num(caller->mm, vmaid);
 
-  if (currg == NULL || cur_vma == NULL) /* Invalid memory identify */
+  if (currg == NULL || cur_vma == NULL ||
+      currg->rg_end <= currg->rg_start ||
+      offset >= currg->rg_end - currg->rg_start)
   {
     pthread_mutex_unlock(&mmvm_lock);
     return -1;
   }
 
-  pg_setval(caller->krnl->mm, currg->rg_start + offset, value, caller);
+  int ret=pg_setval(caller->krnl->mm, currg->rg_start + offset, value, caller);
 
   pthread_mutex_unlock(&mmvm_lock);
-  return 0;
+  return ret;
 }
 
 /*libwrite - PAGING-based write a region memory */

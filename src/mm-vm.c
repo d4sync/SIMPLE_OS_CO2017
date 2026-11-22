@@ -60,9 +60,12 @@ int __mm_swap_page(struct pcb_t *caller, addr_t vicfpn , addr_t swpfpn)
  *@vmaend: vma end
  *
  */
+
+
 struct vm_rg_struct *get_vm_area_node_at_brk(struct pcb_t *caller, int vmaid, addr_t alignedsz)
-{
-  struct vm_rg_struct * newrg;
+{ //mô tả region sắp cấp, có thể vậy, giống một bản nháp???
+  //đoạn này khá lú, không hiểu sao cấp region mà lại đặt tên area???
+  //struct vm_rg_struct * newrg;
   /* TODO retrive current vma to obtain newrg, current comment out due to compiler redundant warning*/
   //struct vm_area_struct *cur_vma = get_vma_by_num(caller->krnl->mm, vmaid);
 
@@ -76,7 +79,28 @@ struct vm_rg_struct *get_vm_area_node_at_brk(struct pcb_t *caller, int vmaid, ad
 
   /* END TODO */
 
-  return newrg;
+  //return newrg;
+
+  struct vm_rg_struct *newrg;
+  struct vm_area_struct *cur_vma;
+
+  if (caller == NULL || caller->mm == NULL)
+    return NULL;
+
+  /* Per-process address space (PDF 2.2.4): use caller->mm, not krnl->mm */
+  cur_vma = get_vma_by_num(caller->mm, vmaid);
+  if (cur_vma == NULL)
+    return NULL;
+
+  newrg = malloc(sizeof(struct vm_rg_struct));
+  if (newrg == NULL)
+    return NULL;
+
+  newrg->vmaid = vmaid;
+  newrg->rg_start = cur_vma->sbrk;
+  newrg->rg_end = cur_vma->sbrk + alignedsz;
+  newrg->rg_next = NULL;
+  return newrg;  
 }
 
 /*validate_overlap_vm_area
@@ -129,7 +153,7 @@ int validate_overlap_vm_area(struct pcb_t *caller, int vmaid, addr_t vmastart, a
  *
  */
 int inc_vma_limit(struct pcb_t *caller, int vmaid, addr_t inc_sz)
-{
+{ //inc_sz truyền vào là size thô, chưa chia để biết page
   /* TOTO with new address scheme, the size need tobe aligned 
    *      the raw inc_sz maybe not fit pagesize
    */ 
@@ -143,7 +167,53 @@ int inc_vma_limit(struct pcb_t *caller, int vmaid, addr_t inc_sz)
   /* TODO: Obtain the new vm area based on vmaid */
 
 
+  if (caller == NULL || caller->mm == NULL || inc_sz == 0)
+    return -1; //kiểm tra mấy cái ngoại lệ 
+
+  struct vm_area_struct *cur_vma; //vùng nhớ ảo lấy từ pcb của tiến trình hiện tại
+  cur_vma = get_vma_by_num(caller->mm, vmaid); // lấy area0 từ pcb của tiến trình
+  if (cur_vma == NULL)
+    return -1;
+
+
+  addr_t inc_amt; //tăng bao nhiêu, tính theo số vừa, tròn cho page
+  int incnumpage;
+
+  #ifdef MM64
+  inc_amt = PAGING64_PAGE_ALIGNSZ(inc_sz);     //làm tròn lên số kích thước tương đương số page nguyên vẹn
+  incnumpage = inc_amt / PAGING64_PAGESZ;      /* 1 page */
+  #else
+  inc_amt = PAGING_PAGE_ALIGNSZ(inc_sz);
+  incnumpage = inc_amt / PAGING_PAGESZ;
+  #endif
+
+  struct vm_rg_struct *tempRegion; 
+  tempRegion = get_vm_area_node_at_brk(caller, vmaid, inc_amt); // tạo một region mới từ sbrk tới sbrk+size
+  if (tempRegion == NULL)
+    return -1;
+  
+  //kiểm tra xem có overlap page không 
+  if (validate_overlap_vm_area(caller, vmaid, tempRegion->rg_start, tempRegion->rg_end) < 0)
+  {
+    free(tempRegion); //nếu overlap là free vùng nhớ và trả về -1 báo lỗi
+    return -1;
+  }
+
+  if (vm_map_ram(caller, tempRegion->rg_start, tempRegion->rg_end, tempRegion->rg_start, incnumpage, tempRegion) != 0)
+  {
+    free(tempRegion);
+    return -1;                   /* sbrk/vm_end untouched on failure */
+  }
+
+  cur_vma->sbrk = tempRegion->rg_end;
+  if (cur_vma->vm_end < cur_vma->sbrk)
+  {
+    cur_vma->vm_end = cur_vma->sbrk;
+  }
+  free(tempRegion);
   return 0;
+
+
 }
 
 // #endif

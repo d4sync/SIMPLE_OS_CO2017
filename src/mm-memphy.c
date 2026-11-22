@@ -152,8 +152,11 @@ int MEMPHY_format(struct memphy_struct *mp, int pagesz)
 }
 
 int MEMPHY_get_freefp(struct memphy_struct *mp, addr_t *retfpn)
-{
-   struct framephy_struct *fp = mp->free_fp_list;
+{ // chỉ cấp 1
+   if (mp == NULL || retfpn == NULL)
+      return -1;
+
+   struct framephy_struct *fp = mp->free_fp_list; // vào bộ nhớ có cái ds free
 
    if (fp == NULL)
       return -1;
@@ -168,8 +171,11 @@ int MEMPHY_get_freefp(struct memphy_struct *mp, addr_t *retfpn)
     * TODO MEMPHY is iteratively used up until its exhausted
     * No garbage collector acting then it not been released
     */
-   free(fp);
+   *retfpn = fp->fpn;//trả fpn của cái free
+   mp->free_fp_list = fp->fp_next; // lùi 1 cái
 
+
+   free(fp);
    return 0;
 }
 
@@ -184,9 +190,14 @@ int MEMPHY_dump(struct memphy_struct *mp)
 }
 
 int MEMPHY_put_freefp(struct memphy_struct *mp, addr_t fpn)
-{
-   struct framephy_struct *fp = mp->free_fp_list;
+{ 
+   if (mp == NULL)
+      return -1;
+      
+   struct framephy_struct *fp = mp->free_fp_list; // vào cái ds frame trống
    struct framephy_struct *newnode = malloc(sizeof(struct framephy_struct));
+   if (newnode == NULL)
+      return -1;
 
    /* Create new node with value fpn */
    newnode->fpn = fpn;

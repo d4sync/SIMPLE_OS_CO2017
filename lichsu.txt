@@ -1,0 +1,4 @@
+hôm nay ngày 21/11, tôi, Mạnh đã làm phần alloc, theo thôi alloc đã đầy đủ, nên tôi lần tới syscall 17 tại sys_mem để sửa sysmemmap để nó dùng pcb thật, không phải là dummy, và sẽ trả về giá trị đúng, không còn là auto ra 0 nữa.
+trong mm-vm.c , đã sửa inc_vma_limit, validate_overlap_vm_area
+
+chuẩn bị tiến hành sửa vmmapram
