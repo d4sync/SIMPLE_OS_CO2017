@@ -25,6 +25,24 @@
 static pthread_mutex_t mmvm_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_mutex_t kmm_lock = PTHREAD_MUTEX_INITIALIZER;
 
+/* Page size / page number / offset for the active address mode */
+#ifdef MM64
+#define LIBMEM_PAGESZ          PAGING64_PAGESZ
+#define LIBMEM_PGN(addr)       ((addr) >> PAGING64_ADDR_PT_SHIFT)
+#define LIBMEM_OFFST(addr)     ((addr) & (PAGING64_PAGESZ - 1))
+#define LIBMEM_ALIGNSZ(sz)     PAGING64_PAGE_ALIGNSZ(sz)
+#else
+#define LIBMEM_PAGESZ          PAGING_PAGESZ
+#define LIBMEM_PGN(addr)       PAGING_PGN(addr)
+#define LIBMEM_OFFST(addr)     PAGING_OFFST(addr)
+#define LIBMEM_ALIGNSZ(sz)     PAGING_PAGE_ALIGNSZ(sz)
+#endif
+
+/* Syscall number of memmap (see src/syscall.tbl) */
+#define SYSCALL_MEMMAP 17
+
+
+
 /*enlist_vm_freerg_list - add new rg to freerg_list
  *@mm: memory region
  *@rg_elmt: new region
@@ -320,11 +338,18 @@ int pg_getpage(struct mm_struct *mm, int pgn, int *fpn, struct pcb_t *caller)
  */
 int pg_getval(struct mm_struct *mm, int addr, BYTE *data, struct pcb_t *caller)
 {
-  int pgn = PAGING_PGN(addr);
-//int off = ...
-  int fpn;
 
-  if (pg_getpage(mm, pgn, &fpn, caller) != 0)
+  if (data == NULL)
+    return -1;
+
+  int pgn = LIBMEM_PGN((addr_t)addr); // tính page munber
+  int off = LIBMEM_OFFST((addr_t)addr); //offset
+  int fpn;
+  struct sc_regs regs;
+
+
+
+  if (pg_getpage(mm, pgn, &fpn, caller) != 0) //thằng số 3 làm getpage??
     return -1; /* invalid page access */
 
 //int phyaddr = ...
@@ -335,6 +360,14 @@ int pg_getval(struct mm_struct *mm, int addr, BYTE *data, struct pcb_t *caller)
    *  SYSCALL 17 sys_memmap with SYSMEM_IO_READ
    */
 
+  /* SYSCALL 17 memmap / SYSMEM_IO_READ: a2 = physical address, a3 = result */
+  regs.a1 = SYSMEM_IO_READ;
+  regs.a2 = (addr_t)fpn * PAGING_PAGESZ + off;
+  regs.a3 = 0;
+  if (_syscall(caller->krnl, caller->pid, 17, &regs) != 0)
+    return -1;
+
+  *data = (BYTE)regs.a3;
   return 0;
 }
 
@@ -346,10 +379,10 @@ int pg_getval(struct mm_struct *mm, int addr, BYTE *data, struct pcb_t *caller)
  */
 int pg_setval(struct mm_struct *mm, int addr, BYTE value, struct pcb_t *caller)
 {
-  int pgn = PAGING_PGN(addr);
-//int off = ...
+  int pgn = LIBMEM_PGN(addr);
+  int off = LIBMEM_OFFST(addr);
   int fpn;
-
+  struct sc_regs regs;
   /* Get the page to MEMRAM, swap from MEMSWAP if needed */
   if (pg_getpage(mm, pgn, &fpn, caller) != 0)
     return -1; /* invalid page access */
@@ -360,6 +393,13 @@ int pg_setval(struct mm_struct *mm, int addr, BYTE value, struct pcb_t *caller)
    *  MEMPHY WRITE with SYSMEM_IO_WRITE 
    * SYSCALL 17 sys_memmap
    */
+
+  regs.a1 = SYSMEM_IO_WRITE;
+  regs.a2 = (addr_t)fpn * LIBMEM_PAGESZ + off;
+  regs.a3 = value;
+
+  if (_syscall(caller->krnl, caller->pid, SYSCALL_MEMMAP, &regs) != 0)
+    return -1;
 
   return 0;
 }
