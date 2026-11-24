@@ -23,13 +23,14 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include <stdatomic.h>
 
 #include "sysbus.h"
-#include "dpi_rtl.h"
+#include "dma.h"
 
 static int time_slot;
 static int num_cpus;
-static int done = 0;
+static atomic_int done = 0; /* Loader has published all processes. */
 static struct krnl_t os;
 
 #ifdef MM_PAGING
@@ -72,12 +73,17 @@ static void * cpu_routine(void * args) {
 		if (proc == NULL) {
 			/* No process is running, the we load new process from
 		 	* ready queue */
+			int all_loaded = atomic_load(&done);
 			proc = get_proc();
+			if (proc == NULL && all_loaded) {
+				printf("\tCPU %d stopped\n", id);
+				break;
+			}
 			if (proc == NULL) {
                            next_slot(timer_id);
                            continue; /* First load failed. skip dummy load */
                         }
-		}else if (proc->pc == proc->code->size) {
+		}else if (proc->pc == proc->code->size && !dma_pending(proc->pid)) {
 			/* The porcess has finish it job */
 			printf("\tCPU %d: Processed %2d has finished\n",
 				id ,proc->pid);
@@ -93,11 +99,7 @@ static void * cpu_routine(void * args) {
 		}
 		
 		/* Recheck process status after loading new process */
-		if (proc == NULL && done) {
-			/* No process to run, exit */
-			printf("\tCPU %d stopped\n", id);
-			break;
-		}else if (proc == NULL) {
+		if (proc == NULL) {
 			/* There may be new processes to run in
 			 * next time slots, just skip current slot */
 			next_slot(timer_id);
@@ -117,24 +119,6 @@ static void * cpu_routine(void * args) {
 	pthread_exit(NULL);
 }
 
-
-static void * co_processor(void *arg) {
-    (void)arg;
-    /* TODO: Initialize the internal Verilator RTL simulation.
-	 *       This is necessary to ensure that the RTL simulation is ready for DPI calls.
-      */
-    if (rtl_dma_init_simulation() != 0) {
-        printf("Cannot initialize RTL simulation\n");
-        return (void*)1;
-    }
-	
-	/* TODO: This asynchronous implementation of DMA
-     *        DMA completion callback is not yet implemented in this testbench
-     */
-    // Install callback handler
-    //dma_done_callback();  // Call the callback to signal DMA completion
-    return NULL;
-}
 
 static void * ld_routine(void * args) {
 #ifdef MM_PAGING
@@ -258,7 +242,6 @@ int main(int argc, char * argv[]) {
 	read_config(path);
 
 	pthread_t * cpu = (pthread_t*)malloc(num_cpus * sizeof(pthread_t));
-	pthread_t * dma = (pthread_t*)malloc(sizeof(pthread_t));
 	struct cpu_args * args =
 		(struct cpu_args*)malloc(sizeof(struct cpu_args) * num_cpus);
 	pthread_t ld;
@@ -281,6 +264,10 @@ int main(int argc, char * argv[]) {
 
 	/* Create MEM RAM */
 	init_memphy(&mram, memramsz, rdmflag);
+        if (memory_bank_attach((uint8_t *)mram.storage, memramsz) || dma_start()) {
+            fprintf(stderr, "Cannot start DMA on simulated RAM\n");
+            return 1;
+        }
 
         /* Create all MEM SWAP */ 
 	int sit;
@@ -313,14 +300,16 @@ int main(int argc, char * argv[]) {
 			cpu_routine, (void*)&args[i]);
 	}
 
-	/* Run co-processor */
-	pthread_create(dma, NULL, co_processor, NULL);
 
 	/* Wait for CPU and loader finishing */
 	for (i = 0; i < num_cpus; i++) {
 		pthread_join(cpu[i], NULL);
 	}
 	pthread_join(ld, NULL);
+#ifdef MM_PAGING
+        dma_stop();
+        memory_bank_cleanup();
+#endif
 
 	/* Stop timer */
 	stop_timer();

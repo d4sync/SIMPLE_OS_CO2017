@@ -15,6 +15,7 @@
  */
 
 #include "mm.h"
+#include "sysbus.h"
 #include "mm64.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -71,9 +72,11 @@ int MEMPHY_read(struct memphy_struct *mp, addr_t addr, BYTE *value)
    if (mp == NULL)
       return -1;
 
-   if (mp->rdmflg)
+   if (mp->rdmflg) {
+      sysbus_lock_ram();
       *value = mp->storage[addr];
-   else /* Sequential access device */
+      sysbus_unlock_ram();
+   } else /* Sequential access device */
       return MEMPHY_seq_read(mp, addr, value);
 
    return 0;
@@ -111,9 +114,11 @@ int MEMPHY_write(struct memphy_struct *mp, addr_t addr, BYTE data)
    if (mp == NULL)
       return -1;
 
-   if (mp->rdmflg)
+   if (mp->rdmflg) {
+      sysbus_lock_ram();
       mp->storage[addr] = data;
-   else /* Sequential access device */
+      sysbus_unlock_ram();
+   } else /* Sequential access device */
       return MEMPHY_seq_write(mp, addr, data);
 
    return 0;

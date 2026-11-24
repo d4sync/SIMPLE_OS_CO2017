@@ -12,6 +12,8 @@
 #include "syscall.h"
 #include "libmem.h"
 #include "queue.h"
+#include "dma.h"
+#include <errno.h>
 #include <stdlib.h>
 
 #ifdef MM64
@@ -26,6 +28,12 @@ int __sys_memmap(struct krnl_t *krnl, uint32_t pid, struct sc_regs* regs)
 {
    int memop = regs->a1;
    BYTE value;
+   if (memop == SYSMEM_DMA_OP) {
+       if (regs->a2 > UINT32_MAX || regs->a3 > UINT32_MAX ||
+           regs->a4 > UINT32_MAX || regs->a5 > UINT32_MAX)
+           return -EINVAL;
+       return dma_copy_regions(krnl, pid, regs->a2, regs->a3, regs->a4, regs->a5);
+   }
    /* 
     * TODO THIS DUMMY CREATE EMPTY PROC TO AVOID COMPILER NOTIFY 
     *      need to be eliminated

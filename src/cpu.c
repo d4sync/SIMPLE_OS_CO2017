@@ -13,6 +13,9 @@
 #include "mm.h"
 #include "syscall.h"
 #include "libmem.h"
+#include "dma.h"
+#include <errno.h>
+#include <stdlib.h>
 
 int calc(struct pcb_t *proc)
 {
@@ -38,7 +41,8 @@ int free_data(struct pcb_t *proc, uint32_t reg_index)
 	return free_mem(proc->regs[reg_index], proc);
 }
 
-int read(
+#ifndef MM_PAGING
+static int legacy_read(
 	struct pcb_t *proc, // Process executing the instruction
 	uint32_t source,	// Index of source register
 	uint32_t offset,	// Source address = [source] + [offset]
@@ -57,7 +61,7 @@ int read(
 	}
 }
 
-int write(
+static int legacy_write(
 	struct pcb_t *proc,	// Process executing the instruction
 	BYTE data,		// Data to be wrttien into memory
 	uint32_t destination, // Index of destination register
@@ -66,6 +70,8 @@ int write(
 	// [destination] + [offset]
 	return write_mem(proc->regs[destination] + offset, proc, data);
 }
+
+#endif
 
 int run(struct pcb_t *proc)
 {
@@ -76,6 +82,12 @@ int run(struct pcb_t *proc)
 	}
 
 	struct inst_t ins = proc->code->text[proc->pc];
+#ifdef MM_PAGING
+    /* CALC can run during DMA. Retry this PID's next memory instruction
+     * on a later CPU slot, before it can read/free an unfinished buffer. */
+    if (ins.opcode != CALC && dma_pending(proc->pid))
+        return -EBUSY;
+#endif
 	proc->pc++;
 	int stat = 1;
 switch (ins.opcode)
@@ -101,7 +113,15 @@ switch (ins.opcode)
 		stat = libkmem_copy_to_user(proc, ins.arg_0, ins.arg_1, ins.arg_2, ins.arg_3);
 		break;
 	case DMA_MEMCPY:
-		stat = libmem_dma_memcpy(proc, ins.arg_0, ins.arg_1, ins.arg_2, ins.arg_3);
+        if (ins.arg_0 > UINT32_MAX || ins.arg_1 > UINT32_MAX ||
+            ins.arg_2 > UINT32_MAX || ins.arg_3 > UINT32_MAX)
+            stat = -EINVAL;
+        else
+            stat = libmem_dma_memcpy(proc, ins.arg_0, ins.arg_1, ins.arg_2, ins.arg_3);
+        if (stat == -EBUSY)
+            proc->pc--; /* Another PID owns the only DMA channel. */
+        else if (stat)
+            fprintf(stderr, "DMA PID %u: submit failed (%d)\n", proc->pid, stat);
 		break;
 #endif
 	case FREE:
@@ -113,16 +133,28 @@ switch (ins.opcode)
 		break;
 	case READ:
 #ifdef MM_PAGING
-		stat = libread(proc, ins.arg_0, ins.arg_1, (uint32_t*) &ins.arg_2);
+        {
+            uint32_t value = 0;
+            if (ins.arg_2 >= sizeof(proc->regs) / sizeof(proc->regs[0]))
+                break;
+            stat = libread(proc, ins.arg_0, ins.arg_1, &value);
+            if (stat == 0) {
+                proc->regs[ins.arg_2] = (uint8_t)value;
+                if (getenv("DMA_TRACE"))
+                    printf("CPU READ region=%u offset=%llu value=%u\n",
+                           (unsigned)ins.arg_0, (unsigned long long)ins.arg_1,
+                           (unsigned)(uint8_t)value);
+            }
+        }
 #else
-		stat = read(proc, ins.arg_0, ins.arg_1, ins.arg_2);
+		stat = legacy_read(proc, ins.arg_0, ins.arg_1, ins.arg_2);
 #endif
 		break;
 	case WRITE:
 #ifdef MM_PAGING
 		stat = libwrite(proc, ins.arg_0, ins.arg_1, ins.arg_2);
 #else
-		stat = write(proc, ins.arg_0, ins.arg_1, ins.arg_2);
+		stat = legacy_write(proc, ins.arg_0, ins.arg_1, ins.arg_2);
 #endif
 		break;
 	case SYSCALL:
