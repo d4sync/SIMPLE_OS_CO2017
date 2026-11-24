@@ -466,19 +466,15 @@ addr_t __kmalloc(struct pcb_t *caller, int vmaid, int rgid, addr_t size, addr_t 
  */
 int libmem_dma_memcpy(struct pcb_t *caller, uint32_t src, uint32_t dst, uint32_t offset, uint32_t size)
 {
-  /* TODO: provide DMA mempy */
-
-  //struct krnl_t *krnl = caller->krnl;
-
-  /*
-   *  TODO: provide asynchronous dma memcpy
-   *        handling the dma_done_callback
-   */
-  //do_dma(caller, (uint64_t) src, (uint64_t) dst, (uint64_t) size);
-  //krnl->...
-  //krnl->...
-
-  return 0;
+  if (!caller)
+    return -1;
+  struct sc_regs regs = {0};
+  regs.a1 = SYSMEM_DMA_OP;
+  regs.a2 = src;
+  regs.a3 = dst;
+  regs.a4 = offset;
+  regs.a5 = size;
+  return _syscall(caller->krnl, caller->pid, 17, &regs);
 }
 
 

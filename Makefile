@@ -61,14 +61,9 @@ VDMA_GLOBAL_FAST = verilated verilated_dpi verilated_vcd_c verilated_threads
 VDMA_OBJ_FAST = $(addprefix $(OBJ)/, $(addsuffix .o, $(VDMA_CLASSES_FAST) $(VDMA_SUPPORT_FAST) $(VDMA_GLOBAL_FAST)))
 VDMA_OBJ_SLOW = $(addprefix $(OBJ)/, $(addsuffix .o, $(VDMA_CLASSES_SLOW) $(VDMA_SUPPORT_SLOW)))
 
-# User C++ classes
-VDMA_USER_CLASSES = dpi_rtl sysbus dma_c_testbench
-VDMA_USER_OBJ = $(addprefix $(OBJ)/, $(addsuffix .o, $(VDMA_USER_CLASSES)))
-
-# For OS target: dma_c_testbench compiled with DMA_MAIN=0 (default)
-VDMA_USER_OBJ_OS = $(OBJ)/dpi_rtl.o $(OBJ)/sysbus.o $(OBJ)/dma_c_testbench.o
-# For DMA target: dma_c_testbench compiled with DMA_MAIN=1
-VDMA_USER_OBJ_DMA = $(OBJ)/dpi_rtl.o $(OBJ)/sysbus.o $(OBJ)/dma_c_testbench_dma.o
+# Common DMA driver; only the standalone target adds a testbench main.
+VDMA_USER_OBJ_OS = $(OBJ)/dpi_rtl.o $(OBJ)/sysbus.o $(OBJ)/dma.o
+VDMA_USER_OBJ_DMA = $(VDMA_USER_OBJ_OS) $(OBJ)/dma_c_testbench_dma.o
 
 VDMA_OBJ_OS = $(VDMA_OBJ_FAST) $(VDMA_OBJ_SLOW) $(VDMA_USER_OBJ_OS)
 VDMA_OBJ_DMA = $(VDMA_OBJ_FAST) $(VDMA_OBJ_SLOW) $(VDMA_USER_OBJ_DMA)
@@ -89,42 +84,35 @@ mem: $(MEM_OBJ)
 sched: $(SCHED_OBJ)
 	$(MAKE) $(LFLAGS) $(MEM_OBJ) -o sched $(LIB)
 
-# Compile DMA testbench with C 
-# define DMA_MAIN=1 in src/dma_c_testbench.cpp to enable main()
-dma: $(OBJ) $(VDMA_OBJ_FAST) $(VDMA_OBJ_SLOW) $(OBJ)/dpi_rtl.o $(OBJ)/sysbus.o $(OBJ)/dma_c_testbench_dma.o
-	$(CXX) $(LFLAGS) $(VDMA_OBJ_FAST) $(VDMA_OBJ_SLOW) $(OBJ)/dpi_rtl.o $(OBJ)/sysbus.o $(OBJ)/dma_c_testbench_dma.o -o dma_testbench $(LIB)
+dma: $(VDMA_OBJ_DMA)
+	$(CXX) $(LFLAGS) $^ -o dma_testbench $(LIB)
 
 # Compile dma_c_testbench with DMA_MAIN=1 for standalone testbench
-$(OBJ)/dma_c_testbench_dma.o: src/dma_c_testbench.cpp ${HEADER} $(OBJ)
+$(OBJ)/dma_c_testbench_dma.o: src/dma_c_testbench.cpp ${HEADER} | $(OBJ)
 	$(CXX_MAKE) $(CXXFLAGS) -DDEBUG_ENABLED=1 -DDMA_MAIN=1 $< -o $@
 
 # Compile syscall
-syscalltbl.lst: $(SRC)/syscall.tbl
-	@echo $(OS_OBJ)
-	chmod +x $(SRC)/syscalltbl.sh
-	$(SRC)/syscalltbl.sh $< $(SRC)/$@
-#	mv $(OBJ)/syscalltbl.lst $(INCLUDE)/
+$(SRC)/syscalltbl.lst: $(SRC)/syscall.tbl $(SRC)/syscalltbl.sh
+	sh $(SRC)/syscalltbl.sh $< $@
 
 # Compile the whole OS simulation
-os: $(OBJ) syscalltbl.lst $(OS_OBJ)
+$(OBJ)/syscall.o: $(SRC)/syscalltbl.lst
+
+os: $(OBJ) $(SRC)/syscalltbl.lst $(OS_OBJ)
 	$(CXX) $(LFLAGS) $(OS_OBJ) -o os $(LIB) -lpthread
 
-$(OBJ)/%.o: %.c ${HEADER} $(OBJ)
+$(OBJ)/%.o: %.c ${HEADER} | $(OBJ)
 	$(MAKE) $(CFLAGS) $< -o $@
 
-$(OBJ)/%.o: %.cpp ${HEADER} $(OBJ)
+$(OBJ)/%.o: %.cpp ${HEADER} | $(OBJ)
 	$(CXX_MAKE) $(CXXFLAGS) -DDEBUG_ENABLED=1 $< -o $@
 
-# Compile dma_c_testbench for OS target with DMA_MAIN=0 (library mode)
-$(OBJ)/dma_c_testbench.o: src/dma_c_testbench.cpp ${HEADER} $(OBJ)
-	$(CXX_MAKE) $(CXXFLAGS) -DDEBUG_ENABLED=1 -DDMA_MAIN=0 $< -o $@
-
 # Verilated
-$(OBJ)/verilated.o: $(VERILATOR_ROOT)/include/verilated.cpp
+$(OBJ)/verilated.o: $(VERILATOR_ROOT)/include/verilated.cpp | $(OBJ)
 	$(CXX_MAKE) $(CXXFLAGS) -DDEBUG_ENABLED=1 -I$(VERILATOR_ROOT)/include $< -o $@
 
 # Verilated global objects (from verilated.mk)
-$(OBJ)/verilated_%.o: $(VERILATOR_ROOT)/include/verilated_%.cpp
+$(OBJ)/verilated_%.o: $(VERILATOR_ROOT)/include/verilated_%.cpp | $(OBJ)
 	$(CXX_MAKE) $(CXXFLAGS) -DDEBUG_ENABLED=1 -I$(VERILATOR_ROOT)/include $< -o $@
 
 # Prepare objectives container
@@ -135,3 +123,15 @@ clean:
 	rm -f $(SRC)/*.lst
 	rm -f $(OBJ)/*.o os sched mem pdg dma_testbench *.vcd
 	rm -rf $(OBJ)
+
+.PHONY: test-dma
+$(OBJ)/dma_integration.o: tests/dma_integration.c $(HEADER) | $(OBJ)
+	$(MAKE) $(CFLAGS) $< -o $@
+
+$(OBJ)/dma_integration: $(filter-out $(OBJ)/os.o,$(OS_OBJ)) $(OBJ)/dma_integration.o
+	$(CXX) $(LFLAGS) $^ -o $@ $(LIB)
+
+test-dma: dma $(OBJ)/dma_integration
+	./dma_testbench
+	./dma_testbench 0x1000 0x2000 1024
+	./$(OBJ)/dma_integration

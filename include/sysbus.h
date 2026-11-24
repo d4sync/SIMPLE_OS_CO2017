@@ -43,6 +43,23 @@ size_t memory_bank_get_size(void);
 // Check if memory bank is initialized
 int memory_bank_is_available(void);
 
+/* Bind borrowed OS RAM to the bus. Call at startup, before starting DMA.
+ * The owner must keep storage alive until the DMA worker has stopped.
+ * memory_bank_cleanup() unbinds it without freeing OS memory.
+ */
+/* RAM-data lock shared by CPU MEMPHY accesses and DMA bus beats.
+ * Acquire last; never call the channel or MMU while holding it. */
+void sysbus_lock_ram(void);
+void sysbus_unlock_ram(void);
+int memory_bank_attach(uint8_t *storage, size_t bytes);
+
+/* Single RTL owner only. Validate the whole descriptor before the first beat.
+ * End returns -1 if a bus callback tried to access outside the descriptor.
+ */
+int dma_bus_valid(uint64_t src, uint64_t dst, uint64_t bytes);
+int dma_bus_begin(uint64_t src, uint64_t dst, uint64_t bytes);
+int dma_bus_end(void);
+
 // DPI Callback: Called from RTL when DMA read access
 int dpi_bank_read32_legacy(long long offset);
 
