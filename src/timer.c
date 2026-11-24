@@ -2,6 +2,7 @@
 #include "timer.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdatomic.h>
 
 static pthread_t _timer;
 
@@ -12,10 +13,10 @@ struct timer_id_container_t {
 
 static struct timer_id_container_t * dev_list = NULL;
 
-static uint64_t _time;
+static _Atomic uint64_t _time;
 
 static int timer_started = 0;
-static int timer_stop = 0;
+static atomic_int timer_stop = 0;
 
 
 static void * timer_routine(void * args) {
@@ -46,10 +47,10 @@ static void * timer_routine(void * args) {
 		
 		/* Let devices continue their job */
 		for (temp = dev_list; temp != NULL; temp = temp->next) {
-			pthread_mutex_lock(&temp->id.timer_lock);
+			pthread_mutex_lock(&temp->id.event_lock);
 			temp->id.done = 0;
 			pthread_cond_signal(&temp->id.timer_cond);
-			pthread_mutex_unlock(&temp->id.timer_lock);
+			pthread_mutex_unlock(&temp->id.event_lock);
 		}
 		if (fsh == event) {
 			break;
@@ -63,17 +64,15 @@ void next_slot(struct timer_id_t * timer_id) {
 	pthread_mutex_lock(&timer_id->event_lock);
 	timer_id->done = 1;
 	pthread_cond_signal(&timer_id->event_cond);
-	pthread_mutex_unlock(&timer_id->event_lock);
-
-	/* Wait for going to next slot */
-	pthread_mutex_lock(&timer_id->timer_lock);
+	
+	/* Wait with the same mutex that protects done. */
 	while (timer_id->done) {
 		pthread_cond_wait(
 			&timer_id->timer_cond,
-			&timer_id->timer_lock
+			&timer_id->event_lock
 		);
 	}
-	pthread_mutex_unlock(&timer_id->timer_lock);
+	pthread_mutex_unlock(&timer_id->event_lock);
 }
 
 uint64_t current_time() {

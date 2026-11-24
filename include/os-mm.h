@@ -12,6 +12,8 @@
 #define OSMM_H
 
 #include <stdint.h>
+#include "os-cfg.h"
+#include <stddef.h>
 
 #define MM_PAGING
 #define PAGING_MAX_MMSWP 4 /* max number of supported swapped space */
@@ -54,6 +56,7 @@ struct pgn_t{
  */
 struct vm_rg_struct {
    int vmaid;
+   unsigned long mode_bit; /* 1: user, 0: kernel */
 
    addr_t rg_start;
    addr_t rg_end;
@@ -101,6 +104,7 @@ struct kcache_pool_struct {
 struct mm_struct {
 #ifdef MM64
    addr_t *pgd;
+   /* Legacy fields: dynamic tree uses child pointers from pgd only. */
    addr_t *p4d;
    addr_t *pud;
    addr_t *pmd;
@@ -110,6 +114,7 @@ struct mm_struct {
 #endif
 
    struct vm_area_struct *mmap;
+   uint64_t tables[5], peak_tables, walks, pt_accesses, data_accesses;
 
    /* Currently we support a fixed number of symbol */
    struct vm_rg_struct symrgtbl[PAGING_MAX_SYMTBL_SZ];

@@ -1,0 +1,21 @@
+CPU-only build: exit 0.
+Assertion tests: 11/11 groups PASS.
+Full RTL build: missing verilated.h; not verified.
+
+Original configs (one run, errors can vary with scheduling):
+os_0_mlq_paging                      exit=0 instruction_errors=10
+os_1_mlq_paging                      exit=0 instruction_errors=6
+os_1_mlq_paging_small_1K             exit=0 instruction_errors=23
+os_1_mlq_paging_small_4K             exit=0 instruction_errors=17
+os_1_singleCPU_mlq                   exit=0 instruction_errors=1
+os_1_singleCPU_mlq_paging            exit=0 instruction_errors=1
+os_2_mlq_paging                      exit=0 instruction_errors=8
+os_2_singleCPU_mlq_paging            exit=0 instruction_errors=8
+os_sc                                exit=0 instruction_errors=1
+os_syscall                           exit=0 instruction_errors=5
+os_syscall_list                      exit=0 instruction_errors=0
+sched                                exit=0 instruction_errors=0
+sched_0                              exit=0 instruction_errors=0
+sched_1                              exit=0 instruction_errors=0
+
+New os_mm_usr_demo: exit=0; instruction_errors=0; expected READ values 165,254,0 per PID.

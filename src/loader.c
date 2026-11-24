@@ -46,11 +46,13 @@ static enum ins_opcode_t get_opcode(char * opt) {
 
 struct pcb_t * load(const char * path) {
 	/* Create new PCB for the new process */
-	struct pcb_t * proc = (struct pcb_t * )malloc(sizeof(struct pcb_t));
+	struct pcb_t * proc = (struct pcb_t * )calloc(1,sizeof(struct pcb_t));
+	if (!proc) { perror("PCB calloc"); exit(1); }
 	proc->pid = avail_pid;
 	avail_pid++;
-	proc->page_table =
-		(struct page_table_t*)malloc(sizeof(struct page_table_t));
+	#ifndef MM_PAGING
+	proc->page_table = calloc(1,sizeof(struct page_table_t));
+#endif
 	proc->bp = PAGE_SIZE;
 	proc->pc = 0;
 
@@ -61,61 +63,36 @@ struct pcb_t * load(const char * path) {
 		exit(1);		
 	}
 	snprintf(proc->path, sizeof(proc->path), "%s", path);
-	char opcode[32];
-	proc->code = (struct code_seg_t*)malloc(sizeof(struct code_seg_t));
-	fscanf(file, "%u %u", &proc->priority, &proc->code->size);
-	proc->code->text = (struct inst_t*)malloc(
-		sizeof(struct inst_t) * proc->code->size
-	);
-	uint32_t i = 0;
-	char buf[200];
-	for (i = 0; i < proc->code->size; i++) {
-		fscanf(file, "%s", opcode);
-		proc->code->text[i].opcode = get_opcode(opcode);
-		switch(proc->code->text[i].opcode) {
-		case CALC:
-			break;
-		case KMALLOC:
-		case ALLOC:
-			fscanf(
-				file,
-				"" FORMAT_ARG " " FORMAT_ARG "\n",
-				&proc->code->text[i].arg_0,
-				&proc->code->text[i].arg_1
-			);
-			break;
-		case FREE:
-			fscanf(file, "" FORMAT_ARG "\n", &proc->code->text[i].arg_0);
-			break;
-		case READ:
-		case WRITE:
-			fscanf(
-				file,
-				"" FORMAT_ARG " " FORMAT_ARG " " FORMAT_ARG "\n",
-				&proc->code->text[i].arg_0,
-				&proc->code->text[i].arg_1,
-				&proc->code->text[i].arg_2
-			);
-			break;
-		case DMA_MEMCPY:
-		case COPY_FROM_USER:
-		case COPY_TO_USER:
-		case SYSCALL:
-			fgets(buf, sizeof(buf), file);
-			sscanf(buf, "" FORMAT_ARG " " FORMAT_ARG " " FORMAT_ARG " " FORMAT_ARG "",
-			           &proc->code->text[i].arg_0,
-			           &proc->code->text[i].arg_1,
-			           &proc->code->text[i].arg_2,
-			           &proc->code->text[i].arg_3
-			);
-			break;
-		default:
-			printf("Opcode: %s\n", opcode);
-			exit(1);
-		}
-	}
-	return proc;
+    char line[256], opcode[32], extra;
+    proc->code = calloc(1,sizeof(*proc->code));
+    if (!proc->code || !fgets(line,sizeof(line),file) ||
+        sscanf(line,"%u %u %c",&proc->priority,&proc->code->size,&extra)!=2)
+        goto invalid;
+    proc->code->text=calloc(proc->code->size,sizeof(struct inst_t));
+    if (proc->code->size && !proc->code->text)goto invalid;
+    for (uint32_t i=0;i<proc->code->size;++i) {
+        struct inst_t *ins=&proc->code->text[i];
+        do {
+            if (!fgets(line,sizeof(line),file))goto invalid;
+        } while (strspn(line," \t\r\n")==strlen(line));
+        int n=sscanf(line,"%31s " FORMAT_ARG " " FORMAT_ARG " " FORMAT_ARG " " FORMAT_ARG " %c",
+                     opcode,&ins->arg_0,&ins->arg_1,&ins->arg_2,&ins->arg_3,&extra);
+        if (n<1)goto invalid;
+        ins->opcode=get_opcode(opcode);
+        switch (ins->opcode) {
+        case CALC:if(n!=1)goto invalid;break;
+        case FREE:if(n!=2)goto invalid;break;
+        case ALLOC:case KMALLOC:if(n!=3)goto invalid;break;
+        case READ:case WRITE:if(n!=4)goto invalid;break;
+        case COPY_FROM_USER:case COPY_TO_USER:case DMA_MEMCPY:if(n!=5)goto invalid;break;
+        case SYSCALL:if(n<2||n>5)goto invalid;break;
+        default:goto invalid;
+        }
+    }
+    fclose(file);
+    return proc;
+invalid:
+    fprintf(stderr,"Invalid process description: %s\n",path);
+    fclose(file);
+    exit(1);
 }
-
-
-

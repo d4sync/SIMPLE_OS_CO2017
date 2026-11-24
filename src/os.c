@@ -23,13 +23,17 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include <stdatomic.h>
+#include <inttypes.h>
+#include <errno.h>
+#include <limits.h>
 
 #include "sysbus.h"
 #include "dpi_rtl.h"
 
 static int time_slot;
 static int num_cpus;
-static int done = 0;
+static atomic_int done = 0;
 static struct krnl_t os;
 
 #ifdef MM_PAGING
@@ -73,15 +77,15 @@ static void * cpu_routine(void * args) {
 			/* No process is running, the we load new process from
 		 	* ready queue */
 			proc = get_proc();
-			if (proc == NULL) {
-                           next_slot(timer_id);
-                           continue; /* First load failed. skip dummy load */
-                        }
+			time_left = 0;
 		}else if (proc->pc == proc->code->size) {
 			/* The porcess has finish it job */
 			printf("\tCPU %d: Processed %2d has finished\n",
 				id ,proc->pid);
-			free(proc);
+			remove_running_proc(proc);
+            mm_unregister(proc);
+            free_pcb_memph(proc);
+            free(proc->code->text);free(proc->code);free(proc->page_table);free(proc);
 			proc = get_proc();
 			time_left = 0;
 		}else if (time_left == 0) {
@@ -109,7 +113,10 @@ static void * cpu_routine(void * args) {
 		}
 		
 		/* Run current process */
-		run(proc);
+		if(proc->pc < proc->code->size){
+            int rc=run(proc);
+            if(rc)printf("[INSTRUCTION-ERROR] PID=%u PC=%u opcode=%d rc=%d\n",proc->pid,proc->pc-1,proc->code->text[proc->pc-1].opcode,rc);
+        }
 		time_left--;
 		next_slot(timer_id);
 	}
@@ -118,6 +125,7 @@ static void * cpu_routine(void * args) {
 }
 
 
+#ifndef OSSIM_NO_DMA
 static void * co_processor(void *arg) {
     (void)arg;
     /* TODO: Initialize the internal Verilator RTL simulation.
@@ -136,6 +144,8 @@ static void * co_processor(void *arg) {
     return NULL;
 }
 
+#endif
+
 static void * ld_routine(void * args) {
 #ifdef MM_PAGING
 	struct memphy_struct* mram = ((struct mmpaging_ld_args *)args)->mram;
@@ -146,23 +156,12 @@ static void * ld_routine(void * args) {
 	struct timer_id_t * timer_id = (struct timer_id_t*)args;
 #endif
 	int i = 0;
-  /* TODO init kernel page table directory */
-#ifdef MM64
-	os.krnl_pgd = (addr_t*)malloc(PAGING64_MAX_PGN * sizeof(addr_t));
-	os.krnl_p4d = NULL;
-	os.krnl_pud = NULL;
-	os.krnl_pmd = NULL;
-	os.krnl_pt = NULL;
-#else
-	os.krnl_pgd = (uint32_t*)malloc(PAGING_MAX_PGN * sizeof(uint32_t));
-#endif
-	i=0;
-	printf("ld_routine\n");
-	os.mram = mram;
-	os.mswp = mswp;
-	os.active_mswp = active_mswp;
-	os.mm = (struct mm_struct*)malloc(sizeof(struct mm_struct));
-	init_mm(os.mm, NULL);
+    os.mram=mram;os.mswp=mswp;os.active_mswp=active_mswp;
+    os.active_mswp_id=((struct mmpaging_ld_args *)args)->active_mswp_id;
+    os.mm=calloc(1,sizeof(*os.mm));
+    if(init_mm(os.mm,NULL)){fprintf(stderr,"Kernel MM init failed\n");exit(1);}
+    os.mm->mmap->vm_start=os.mm->mmap->vm_end=os.mm->mmap->sbrk=os.kernel_base;
+    os.krnl_pgd=os.mm->pgd;
 	while (i < num_processes) {
 		struct pcb_t * proc = load(ld_processes.path[i]);
 		proc->krnl = &os;
@@ -175,7 +174,7 @@ static void * ld_routine(void * args) {
 	}
 #ifdef MM_PAGING
 	proc->mm = (struct mm_struct*)malloc(sizeof(struct mm_struct));
-	init_mm(proc->mm, proc);
+	if(init_mm(proc->mm,proc)||mm_register(proc)){fprintf(stderr,"Process MM init failed\n");exit(1);}
 #endif
 		printf("\tLoaded a process at %s, PID: %d PRIO: %ld\n",
 			ld_processes.path[i], proc->pid, ld_processes.prio[i]);
@@ -186,63 +185,50 @@ static void * ld_routine(void * args) {
 	}
 	free(ld_processes.path);
 	free(ld_processes.start_time);
+    free(ld_processes.prio);
+    free(args);
 	done = 1;
 	detach_event(timer_id);
 	pthread_exit(NULL);
 }
 
-static void read_config(const char * path) {
-	FILE * file;
-	if ((file = fopen(path, "r")) == NULL) {
-		printf("Cannot find configure file at %s\n", path);
-		exit(1);
-	}
-	fscanf(file, "%d %d %d\n", &time_slot, &num_cpus, &num_processes);
-	ld_processes.path = (char**)malloc(sizeof(char*) * num_processes);
-	ld_processes.start_time = (unsigned long*)
-		malloc(sizeof(unsigned long) * num_processes);
-#ifdef MM_PAGING
-	int sit;
-#ifdef MM_FIXED_MEMSZ
-	/* We provide here a back compatible with legacy OS simulatiom config file
-         * In which, it have no addition config line for Mema, keep only one line
-	 * for legacy info 
-         *  [time slice] [N = Number of CPU] [M = Number of Processes to be run]
-         */
-        memramsz  =  0x100000000;
-        memswpsz[0] = 0x1000000;
-	for(sit = 1; sit < PAGING_MAX_MMSWP; sit++)
-		memswpsz[sit] = 0;
-#else
-	/* Read input config of memory size: MEMRAM and upto 4 MEMSWP (mem swap)
-	 * Format: (size=0 result non-used memswap, must have RAM and at least 1 SWAP)
-	 *        MEM_RAM_SZ MEM_SWP0_SZ MEM_SWP1_SZ MEM_SWP2_SZ MEM_SWP3_SZ
-	*/
-	fscanf(file, FORMAT_ARG "\n", &memramsz);
-	for(sit = 0; sit < PAGING_MAX_MMSWP; sit++)
-		fscanf(file, FORMAT_ARG, &(memswpsz[sit])); 
-
-       fscanf(file, "\n"); /* Final character */
-#endif
-#endif
-
-#ifdef MLQ_SCHED
-	ld_processes.prio = (unsigned long*)
-		malloc(sizeof(unsigned long) * num_processes);
-#endif
-	int i;
-	for (i = 0; i < num_processes; i++) {
-		ld_processes.path[i] = (char*)malloc(sizeof(char) * 100);
-		ld_processes.path[i][0] = '\0';
-		strcat(ld_processes.path[i], "input/proc/");
-		char proc[100];
-#ifdef MLQ_SCHED
-		fscanf(file, "%lu %s %lu\n", &ld_processes.start_time[i], proc, &ld_processes.prio[i]);
-#else
-		fscanf(file, "%lu %s\n", &ld_processes.start_time[i], proc);
-#endif
-		strcat(ld_processes.path[i], proc);
-	}
+/* Chap nhan 3 format goc: legacy khong RAM, dong 5 size, hoac
+ * them kernel base truoc dong 5 size. Khong sua input goc. */
+static int read_line(FILE *f,char *line,size_t cap)
+{
+    while(fgets(line,cap,f)){char *p=line;while(*p==' '||*p=='\t'||*p=='\r'||*p=='\n')++p;if(*p)return 1;}return 0;
+}
+static void read_config(const char *path)
+{
+    FILE *f=fopen(path,"r");char line[512],extra,proc[100];
+    if(!f||!read_line(f,line,sizeof(line))||sscanf(line,"%d %d %d",&time_slot,&num_cpus,&num_processes)!=3||time_slot<=0||num_cpus<=0||num_cpus>50||num_processes<0)goto bad;
+    ld_processes.path=calloc(num_processes,sizeof(char*));
+    ld_processes.start_time=calloc(num_processes,sizeof(unsigned long));
+    ld_processes.prio=calloc(num_processes,sizeof(unsigned long));
+    os.kernel_base=KERNEL_BASE_DEFAULT;
+    memramsz=1048576;memswpsz[0]=16777216;
+    int have=read_line(f,line,sizeof(line));
+    unsigned long a[5];char *end;
+    if(have){
+        errno=0;uint64_t base=strtoull(line,&end,0);
+        while(*end==' '||*end=='\t'||*end=='\r'||*end=='\n')++end;
+        if(!errno && end!=line && !*end){
+            if(!mm_canonical(base)||base<KERNEL_BASE_DEFAULT||(base&4095)||base>UINT64_MAX-4096)goto bad;
+            os.kernel_base=base;have=read_line(f,line,sizeof(line));
+        }
+        if(have && sscanf(line,"%lu %lu %lu %lu %lu %c",a,a+1,a+2,a+3,a+4,&extra)==5){
+            if(!a[0]||!(a[1]||a[2]||a[3]||a[4]))goto bad;
+            for(int i=0;i<5;++i)if(a[i]>INT_MAX)goto bad;
+            memramsz=a[0];for(int i=0;i<4;++i)memswpsz[i]=a[i+1];have=read_line(f,line,sizeof(line));
+        }
+    }
+    for(int i=0;i<num_processes;++i){
+        if(!have||sscanf(line,"%lu %99s %lu %c",&ld_processes.start_time[i],proc,&ld_processes.prio[i],&extra)!=3||ld_processes.prio[i]>=MAX_PRIO)goto bad;
+        ld_processes.path[i]=malloc(112);snprintf(ld_processes.path[i],112,"input/proc/%s",proc);
+        have=read_line(f,line,sizeof(line));
+    }
+    fclose(f);return;
+bad:fprintf(stderr,"Invalid config: %s\n",path);if(f)fclose(f);exit(1);
 }
 
 int main(int argc, char * argv[]) {
@@ -251,14 +237,14 @@ int main(int argc, char * argv[]) {
 		printf("Usage: os [path to configure file]\n");
 		return 1;
 	}
-	char path[100];
-	path[0] = '\0';
-	strcat(path, "input/");
-	strcat(path, argv[1]);
+	char path[512];
+    if(snprintf(path,sizeof(path),"input/%s",argv[1])>=(int)sizeof(path))return 1;
 	read_config(path);
 
 	pthread_t * cpu = (pthread_t*)malloc(num_cpus * sizeof(pthread_t));
-	pthread_t * dma = (pthread_t*)malloc(sizeof(pthread_t));
+	#ifndef OSSIM_NO_DMA
+    pthread_t dma;
+#endif
 	struct cpu_args * args =
 		(struct cpu_args*)malloc(sizeof(struct cpu_args) * num_cpus);
 	pthread_t ld;
@@ -280,21 +266,26 @@ int main(int argc, char * argv[]) {
 	struct memphy_struct mswp[PAGING_MAX_MMSWP];
 
 	/* Create MEM RAM */
-	init_memphy(&mram, memramsz, rdmflag);
+	if(init_memphy(&mram,memramsz,rdmflag)){fprintf(stderr,"RAM init failed\n");return 1;}
+    printf("[MM-CONFIG] RAM=%lu page=4096 usable_frames=%lu kernel_base=%016"PRIx64"\n",memramsz,memramsz/4096>8192?8192:memramsz/4096,os.kernel_base);
 
         /* Create all MEM SWAP */ 
 	int sit;
-	for(sit = 0; sit < PAGING_MAX_MMSWP; sit++)
-	       init_memphy(&mswp[sit], memswpsz[sit], rdmflag);
+	struct memphy_struct *swaps[PAGING_MAX_MMSWP];
+    int active=-1;
+    for(sit=0;sit<PAGING_MAX_MMSWP;++sit){
+        if(init_memphy(&mswp[sit],memswpsz[sit],rdmflag))return 1;
+        swaps[sit]=&mswp[sit];if(active<0 && memswpsz[sit])active=sit;
+    }
 
 	/* In Paging mode, it needs passing the system mem to each PCB through loader*/
 	struct mmpaging_ld_args *mm_ld_args = (struct mmpaging_ld_args*)malloc(sizeof(struct mmpaging_ld_args));
 
 	mm_ld_args->timer_id = ld_event;
 	mm_ld_args->mram = (struct memphy_struct *) &mram;
-	mm_ld_args->mswp = (struct memphy_struct**) &mswp;
-	mm_ld_args->active_mswp = (struct memphy_struct *) &mswp[0];
-        mm_ld_args->active_mswp_id = 0;
+	mm_ld_args->mswp = swaps;
+	mm_ld_args->active_mswp = active>=0 ? swaps[active]:NULL;
+        mm_ld_args->active_mswp_id = active>=0?active:0;
 
 
 #endif
@@ -314,7 +305,9 @@ int main(int argc, char * argv[]) {
 	}
 
 	/* Run co-processor */
-	pthread_create(dma, NULL, co_processor, NULL);
+	#ifndef OSSIM_NO_DMA
+    pthread_create(&dma,NULL,co_processor,NULL);
+#endif
 
 	/* Wait for CPU and loader finishing */
 	for (i = 0; i < num_cpus; i++) {
@@ -324,6 +317,13 @@ int main(int argc, char * argv[]) {
 
 	/* Stop timer */
 	stop_timer();
+#ifndef OSSIM_NO_DMA
+    pthread_join(dma,NULL);
+#endif
+    mm_stats(os.mm,0,"kernel-final");
+    mm_destroy(os.mm,&mram);free(os.mm);
+    MEMPHY_destroy(&mram);for(int j=0;j<PAGING_MAX_MMSWP;++j)MEMPHY_destroy(&mswp[j]);
+    free(cpu);free(args);
 
 	return 0;
 

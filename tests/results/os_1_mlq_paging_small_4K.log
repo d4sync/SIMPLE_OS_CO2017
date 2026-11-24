@@ -1,0 +1,190 @@
+[MM-CONFIG] RAM=4096 page=4096 usable_frames=1 kernel_base=ff00000000000000
+Time slot   0
+	Loaded a process at input/proc/p0s, PID: 1 PRIO: 130
+Time slot   1
+	CPU 2: Dispatched process  1
+Time slot   2
+	Loaded a process at input/proc/m0s, PID: 2 PRIO: 120
+	CPU 0: Dispatched process  2
+[VMA] PID=1 start=0000000000000000 end=0000000000001000 sbrk=0000000000001000
+  reg=0 mode=1 range=[0000000000000000,000000000000012c)
+  free=[000000000000012c,0000000000001000)
+[ALLOC] PID=1 reg=0 VA=0000000000000000 size=300
+[INSTRUCTION-ERROR] PID=2 PC=0 opcode=1 rc=-1
+Time slot   3
+	CPU 2: Put process  1 to run queue
+	CPU 2: Dispatched process  1
+[VMA] PID=1 start=0000000000000000 end=0000000000001000 sbrk=0000000000001000
+  reg=0 mode=1 range=[0000000000000000,000000000000012c)
+  reg=4 mode=1 range=[000000000000012c,0000000000000258)
+  free=[0000000000000258,0000000000001000)
+[ALLOC] PID=1 reg=4 VA=000000000000012c size=300
+[INSTRUCTION-ERROR] PID=2 PC=1 opcode=1 rc=-1
+	Loaded a process at input/proc/s3, PID: 3 PRIO: 39
+Time slot   4
+	CPU 1: Dispatched process  3
+[VMA] PID=1 start=0000000000000000 end=0000000000001000 sbrk=0000000000001000
+  reg=4 mode=1 range=[000000000000012c,0000000000000258)
+  free=[0000000000000000,000000000000012c)
+  free=[0000000000000258,0000000000001000)
+	CPU 0: Put process  2 to run queue
+	CPU 0: Dispatched process  2
+[INSTRUCTION-ERROR] PID=2 PC=2 opcode=2 rc=-1
+	Loaded a process at input/proc/s0, PID: 4 PRIO: 38
+	CPU 3: Dispatched process  4
+	CPU 2: Put process  1 to run queue
+	CPU 2: Dispatched process  1
+Time slot   5
+[VMA] PID=1 start=0000000000000000 end=0000000000001000 sbrk=0000000000001000
+  reg=1 mode=1 range=[0000000000000000,0000000000000064)
+  reg=4 mode=1 range=[000000000000012c,0000000000000258)
+  free=[0000000000000064,000000000000012c)
+  free=[0000000000000258,0000000000001000)
+[ALLOC] PID=1 reg=1 VA=0000000000000000 size=100
+[INSTRUCTION-ERROR] PID=2 PC=3 opcode=1 rc=-1
+	CPU 1: Put process  3 to run queue
+	CPU 1: Dispatched process  3
+Time slot   6
+	CPU 0: Put process  2 to run queue
+	CPU 0: Dispatched process  2
+[INSTRUCTION-ERROR] PID=2 PC=4 opcode=4 rc=-1
+	CPU 3: Put process  4 to run queue
+	CPU 3: Dispatched process  4
+Time slot   7
+	CPU 2: Put process  1 to run queue
+	CPU 2: Dispatched process  1
+[INSTRUCTION-ERROR] PID=1 PC=6 opcode=3 rc=-1
+[INSTRUCTION-ERROR] PID=2 PC=5 opcode=4 rc=-1
+Time slot   8
+	CPU 1: Put process  3 to run queue
+	CPU 1: Dispatched process  3
+[INSTRUCTION-ERROR] PID=1 PC=7 opcode=4 rc=-1
+	CPU 0: Processed  2 has finished
+[PAGE TABLE] PID=2
+[MM-STATS] PID=2 user PGD=1 P4D=0 PUD=0 PMD=0 PT=0 bytes=4096 peak_bytes=4096 walks=0 pt_access=0 data_access=0 total=0
+[MM-STATS] PID=2 user-final PGD=1 P4D=0 PUD=0 PMD=0 PT=0 bytes=4096 peak_bytes=4096 walks=0 pt_access=0 data_access=0 total=0
+	Loaded a process at input/proc/m1s, PID: 5 PRIO: 15
+	CPU 3: Put process  4 to run queue
+	CPU 3: Dispatched process  5
+	CPU 2: Put process  1 to run queue
+	CPU 2: Dispatched process  4
+Time slot   9
+	CPU 0: Dispatched process  1
+[INSTRUCTION-ERROR] PID=1 PC=8 opcode=3 rc=-1
+[INSTRUCTION-ERROR] PID=5 PC=0 opcode=1 rc=-1
+	CPU 1: Put process  3 to run queue
+	CPU 1: Dispatched process  3
+[INSTRUCTION-ERROR] PID=5 PC=1 opcode=1 rc=-1
+Time slot  10
+[INSTRUCTION-ERROR] PID=1 PC=9 opcode=4 rc=-1
+	CPU 3: Put process  5 to run queue
+	CPU 3: Dispatched process  5
+[INSTRUCTION-ERROR] PID=5 PC=2 opcode=2 rc=-1
+	Loaded a process at input/proc/p1s, PID: 6 PRIO: 15
+	CPU 2: Put process  4 to run queue
+Time slot  11
+	CPU 2: Dispatched process  6
+	CPU 0: Put process  1 to run queue
+	CPU 0: Dispatched process  4
+[INSTRUCTION-ERROR] PID=5 PC=3 opcode=1 rc=-1
+Time slot  12
+	CPU 1: Put process  3 to run queue
+	CPU 1: Dispatched process  3
+	Loaded a process at input/proc/s2, PID: 7 PRIO: 120
+	CPU 3: Put process  5 to run queue
+	CPU 3: Dispatched process  5
+[INSTRUCTION-ERROR] PID=5 PC=4 opcode=2 rc=-1
+Time slot  13
+	CPU 2: Put process  6 to run queue
+	CPU 2: Dispatched process  6
+	CPU 0: Put process  4 to run queue
+	CPU 0: Dispatched process  4
+	CPU 1: Put process  3 to run queue
+	CPU 1: Dispatched process  3
+Time slot  14
+[INSTRUCTION-ERROR] PID=5 PC=5 opcode=2 rc=-1
+	CPU 3: Processed  5 has finished
+[PAGE TABLE] PID=5
+[MM-STATS] PID=5 user PGD=1 P4D=0 PUD=0 PMD=0 PT=0 bytes=4096 peak_bytes=4096 walks=0 pt_access=0 data_access=0 total=0
+[MM-STATS] PID=5 user-final PGD=1 P4D=0 PUD=0 PMD=0 PT=0 bytes=4096 peak_bytes=4096 walks=0 pt_access=0 data_access=0 total=0
+	CPU 3: Dispatched process  7
+	CPU 1: Processed  3 has finished
+[PAGE TABLE] PID=3
+[MM-STATS] PID=3 user PGD=1 P4D=0 PUD=0 PMD=0 PT=0 bytes=4096 peak_bytes=4096 walks=0 pt_access=0 data_access=0 total=0
+[MM-STATS] PID=3 user-final PGD=1 P4D=0 PUD=0 PMD=0 PT=0 bytes=4096 peak_bytes=4096 walks=0 pt_access=0 data_access=0 total=0
+	CPU 2: Put process  6 to run queue
+	CPU 2: Dispatched process  6
+	CPU 1: Dispatched process  1
+[INSTRUCTION-ERROR] PID=1 PC=10 opcode=3 rc=-1
+Time slot  15
+	CPU 0: Put process  4 to run queue
+	CPU 0: Dispatched process  4
+Time slot  16
+	Loaded a process at input/proc/s1, PID: 8 PRIO: 0
+	CPU 1: Put process  1 to run queue
+	CPU 1: Dispatched process  8
+	CPU 2: Put process  6 to run queue
+	CPU 2: Dispatched process  6
+Time slot  17
+	CPU 3: Put process  7 to run queue
+	CPU 0: Put process  4 to run queue
+	CPU 3: Dispatched process  7
+	CPU 0: Dispatched process  4
+Time slot  18
+	CPU 1: Put process  8 to run queue
+	CPU 1: Dispatched process  8
+	CPU 2: Put process  6 to run queue
+	CPU 3: Put process  7 to run queue
+	CPU 2: Dispatched process  6
+	CPU 3: Dispatched process  7
+Time slot  19
+	CPU 0: Put process  4 to run queue
+	CPU 0: Dispatched process  4
+Time slot  20
+	CPU 0: Processed  4 has finished
+[PAGE TABLE] PID=4
+[MM-STATS] PID=4 user PGD=1 P4D=0 PUD=0 PMD=0 PT=0 bytes=4096 peak_bytes=4096 walks=0 pt_access=0 data_access=0 total=0
+[MM-STATS] PID=4 user-final PGD=1 P4D=0 PUD=0 PMD=0 PT=0 bytes=4096 peak_bytes=4096 walks=0 pt_access=0 data_access=0 total=0
+	CPU 0: Dispatched process  1
+[VMA] PID=1 start=0000000000000000 end=0000000000001000 sbrk=0000000000001000
+  reg=1 mode=1 range=[0000000000000000,0000000000000064)
+  free=[0000000000000064,0000000000001000)
+	CPU 3: Put process  7 to run queue
+	CPU 3: Dispatched process  7
+Time slot  21
+	CPU 1: Put process  8 to run queue
+	CPU 1: Dispatched process  8
+	CPU 2: Processed  6 has finished
+[PAGE TABLE] PID=6
+[MM-STATS] PID=6 user PGD=1 P4D=0 PUD=0 PMD=0 PT=0 bytes=4096 peak_bytes=4096 walks=0 pt_access=0 data_access=0 total=0
+[MM-STATS] PID=6 user-final PGD=1 P4D=0 PUD=0 PMD=0 PT=0 bytes=4096 peak_bytes=4096 walks=0 pt_access=0 data_access=0 total=0
+	CPU 2 stopped
+Time slot  22
+	CPU 0: Processed  1 has finished
+[PAGE TABLE] PID=1
+  VA=0000000000000000 PTE=90000000 FPN=0
+[MM-STATS] PID=1 user PGD=1 P4D=1 PUD=1 PMD=1 PT=1 bytes=20480 peak_bytes=20480 walks=4 pt_access=20 data_access=701 total=721
+[MM-STATS] PID=1 user-final PGD=1 P4D=1 PUD=1 PMD=1 PT=1 bytes=20480 peak_bytes=20480 walks=4 pt_access=20 data_access=701 total=721
+	CPU 0 stopped
+	CPU 1: Put process  8 to run queue
+	CPU 1: Dispatched process  8
+Time slot  23
+	CPU 3: Put process  7 to run queue
+	CPU 3: Dispatched process  7
+	CPU 1: Processed  8 has finished
+[PAGE TABLE] PID=8
+[MM-STATS] PID=8 user PGD=1 P4D=0 PUD=0 PMD=0 PT=0 bytes=4096 peak_bytes=4096 walks=0 pt_access=0 data_access=0 total=0
+[MM-STATS] PID=8 user-final PGD=1 P4D=0 PUD=0 PMD=0 PT=0 bytes=4096 peak_bytes=4096 walks=0 pt_access=0 data_access=0 total=0
+	CPU 1 stopped
+Time slot  24
+Time slot  25
+	CPU 3: Put process  7 to run queue
+	CPU 3: Dispatched process  7
+Time slot  26
+Time slot  27
+	CPU 3: Processed  7 has finished
+[PAGE TABLE] PID=7
+[MM-STATS] PID=7 user PGD=1 P4D=0 PUD=0 PMD=0 PT=0 bytes=4096 peak_bytes=4096 walks=0 pt_access=0 data_access=0 total=0
+[MM-STATS] PID=7 user-final PGD=1 P4D=0 PUD=0 PMD=0 PT=0 bytes=4096 peak_bytes=4096 walks=0 pt_access=0 data_access=0 total=0
+	CPU 3 stopped
+[MM-STATS] PID=0 kernel-final PGD=1 P4D=0 PUD=0 PMD=0 PT=0 bytes=4096 peak_bytes=4096 walks=0 pt_access=0 data_access=0 total=0
