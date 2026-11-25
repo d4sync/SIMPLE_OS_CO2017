@@ -1,4 +1,5 @@
 #ifndef MM_H
+#define MM_H
 
 #include "common.h"
 #include "bitops.h"
@@ -99,8 +100,8 @@ extern "C" {
 
 /* Memory range operator */
 /* TODO implement the INCLUDE and OVERLAP checking mechanism */
-#define INCLUDE(x1,x2,y1,y2) (0)
-#define OVERLAP(x1,x2,y1,y2) (0)
+#define INCLUDE(x1,x2,y1,y2) ((x1) <= (y1) && (y2) <= (x2))
+#define OVERLAP(x1,x2,y1,y2) ((x1) < (y2) && (y1) < (x2))
 
 /* VM region prototypes */
 struct vm_rg_struct * init_vm_rg(addr_t rg_start, addr_t rg_end);
@@ -160,7 +161,7 @@ int pgwrite(
 /* Local VM prototypes */
 struct vm_rg_struct * get_symrg_byid(struct mm_struct* mm, int rgid);
 int validate_overlap_vm_area(struct pcb_t *caller, int vmaid, addr_t vmastart, addr_t vmaend);
-int get_free_vmrg_area(struct pcb_t *caller, int vmaid, int size, struct vm_rg_struct *newrg);
+int get_free_vmrg_area(struct pcb_t *caller, int vmaid, addr_t size, struct vm_rg_struct *newrg);
 int inc_vma_limit(struct pcb_t *caller, int vmaid, addr_t inc_sz);
 int find_victim_page(struct mm_struct* mm, addr_t *pgn);
 struct vm_area_struct *get_vma_by_num(struct mm_struct *mm, int vmaid);

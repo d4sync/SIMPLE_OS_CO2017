@@ -1,0 +1,137 @@
+Time slot   0
+[MM-CONFIG] RAM=268435456 page=4096 usable_frames=8192 kernel_base=ff00000000000000
+	Loaded a process at input/proc/p0s, PID: 1 PRIO: 0
+	CPU 0: Dispatched process  1
+Time slot   1
+[VMA] PID=1 start=0000000000000000 end=0000000000001000 sbrk=0000000000001000
+  reg=0 mode=1 range=[0000000000000000,000000000000012c)
+  free=[000000000000012c,0000000000001000)
+[ALLOC] PID=1 reg=0 VA=0000000000000000 size=300
+	Loaded a process at input/proc/p1s, PID: 2 PRIO: 15
+Time slot   2
+[VMA] PID=1 start=0000000000000000 end=0000000000001000 sbrk=0000000000001000
+  reg=0 mode=1 range=[0000000000000000,000000000000012c)
+  reg=4 mode=1 range=[000000000000012c,0000000000000258)
+  free=[0000000000000258,0000000000001000)
+[ALLOC] PID=1 reg=4 VA=000000000000012c size=300
+	CPU 1: Dispatched process  2
+Time slot   3
+	Loaded a process at input/proc/p1s, PID: 3 PRIO: 0
+[VMA] PID=1 start=0000000000000000 end=0000000000001000 sbrk=0000000000001000
+  reg=4 mode=1 range=[000000000000012c,0000000000000258)
+  free=[0000000000000000,000000000000012c)
+  free=[0000000000000258,0000000000001000)
+[VMA] PID=1 start=0000000000000000 end=0000000000001000 sbrk=0000000000001000
+  reg=1 mode=1 range=[0000000000000000,0000000000000064)
+  reg=4 mode=1 range=[000000000000012c,0000000000000258)
+  free=[0000000000000064,000000000000012c)
+  free=[0000000000000258,0000000000001000)
+[ALLOC] PID=1 reg=1 VA=0000000000000000 size=100
+Time slot   4
+Time slot   5
+	Loaded a process at input/proc/p0s, PID: 4 PRIO: 0
+	CPU 0: Put process  1 to run queue
+	CPU 0: Dispatched process  3
+Time slot   6
+Time slot   7
+	Loaded a process at input/proc/p1s, PID: 5 PRIO: 0
+Time slot   8
+	CPU 1: Put process  2 to run queue
+	CPU 1: Dispatched process  4
+Time slot   9
+[VMA] PID=4 start=0000000000000000 end=0000000000001000 sbrk=0000000000001000
+  reg=0 mode=1 range=[0000000000000000,000000000000012c)
+  free=[000000000000012c,0000000000001000)
+[ALLOC] PID=4 reg=0 VA=0000000000000000 size=300
+Time slot  10
+[VMA] PID=4 start=0000000000000000 end=0000000000001000 sbrk=0000000000001000
+  reg=0 mode=1 range=[0000000000000000,000000000000012c)
+  reg=4 mode=1 range=[000000000000012c,0000000000000258)
+  free=[0000000000000258,0000000000001000)
+[ALLOC] PID=4 reg=4 VA=000000000000012c size=300
+Time slot  11
+[VMA] PID=4 start=0000000000000000 end=0000000000001000 sbrk=0000000000001000
+  reg=4 mode=1 range=[000000000000012c,0000000000000258)
+  free=[0000000000000000,000000000000012c)
+  free=[0000000000000258,0000000000001000)
+	CPU 0: Put process  3 to run queue
+	CPU 0: Dispatched process  1
+[INSTRUCTION-ERROR] PID=1 PC=6 opcode=3 rc=-1
+[VMA] PID=4 start=0000000000000000 end=0000000000001000 sbrk=0000000000001000
+  reg=1 mode=1 range=[0000000000000000,0000000000000064)
+  reg=4 mode=1 range=[000000000000012c,0000000000000258)
+  free=[0000000000000064,000000000000012c)
+  free=[0000000000000258,0000000000001000)
+[ALLOC] PID=4 reg=1 VA=0000000000000000 size=100
+Time slot  12
+[INSTRUCTION-ERROR] PID=1 PC=7 opcode=4 rc=-1
+Time slot  13
+Time slot  14
+[INSTRUCTION-ERROR] PID=1 PC=8 opcode=3 rc=-1
+	CPU 1: Put process  4 to run queue
+	CPU 1: Dispatched process  5
+Time slot  15
+[INSTRUCTION-ERROR] PID=1 PC=9 opcode=4 rc=-1
+Time slot  16
+[INSTRUCTION-ERROR] PID=1 PC=10 opcode=3 rc=-1
+Time slot  17
+Time slot  18
+	CPU 0: Put process  1 to run queue
+	CPU 0: Dispatched process  3
+Time slot  19
+Time slot  20
+	CPU 1: Put process  5 to run queue
+	CPU 1: Dispatched process  4
+[INSTRUCTION-ERROR] PID=4 PC=6 opcode=3 rc=-1
+Time slot  21
+[INSTRUCTION-ERROR] PID=4 PC=7 opcode=4 rc=-1
+Time slot  22
+	CPU 0: Processed  3 has finished
+[PAGE TABLE] PID=3
+[INSTRUCTION-ERROR] PID=4 PC=8 opcode=3 rc=-1
+[MM-STATS] PID=3 user PGD=1 P4D=0 PUD=0 PMD=0 PT=0 bytes=4096 peak_bytes=4096 walks=0 pt_access=0 data_access=0 total=0
+[MM-STATS] PID=3 user-final PGD=1 P4D=0 PUD=0 PMD=0 PT=0 bytes=4096 peak_bytes=4096 walks=0 pt_access=0 data_access=0 total=0
+	CPU 0: Dispatched process  1
+[VMA] PID=1 start=0000000000000000 end=0000000000001000 sbrk=0000000000001000
+  reg=1 mode=1 range=[0000000000000000,0000000000000064)
+  free=[0000000000000064,0000000000001000)
+Time slot  23
+[INSTRUCTION-ERROR] PID=4 PC=9 opcode=4 rc=-1
+[INSTRUCTION-ERROR] PID=4 PC=10 opcode=3 rc=-1
+	CPU 0: Processed  1 has finished
+[PAGE TABLE] PID=1
+  VA=0000000000000000 PTE=90000000 FPN=0
+[MM-STATS] PID=1 user PGD=1 P4D=1 PUD=1 PMD=1 PT=1 bytes=20480 peak_bytes=20480 walks=4 pt_access=20 data_access=701 total=721
+[MM-STATS] PID=1 user-final PGD=1 P4D=1 PUD=1 PMD=1 PT=1 bytes=20480 peak_bytes=20480 walks=4 pt_access=20 data_access=701 total=721
+	CPU 0: Dispatched process  5
+Time slot  24
+Time slot  25
+Time slot  26
+	CPU 1: Put process  4 to run queue
+	CPU 1: Dispatched process  4
+[VMA] PID=4 start=0000000000000000 end=0000000000001000 sbrk=0000000000001000
+  reg=1 mode=1 range=[0000000000000000,0000000000000064)
+  free=[0000000000000064,0000000000001000)
+Time slot  27
+Time slot  28
+	CPU 0: Processed  5 has finished
+[PAGE TABLE] PID=5
+	CPU 1: Processed  4 has finished
+[MM-STATS] PID=5 user PGD=1 P4D=0 PUD=0 PMD=0 PT=0 bytes=4096 peak_bytes=4096 walks=0 pt_access=0 data_access=0 total=0
+[MM-STATS] PID=5 user-final PGD=1 P4D=0 PUD=0 PMD=0 PT=0 bytes=4096 peak_bytes=4096 walks=0 pt_access=0 data_access=0 total=0
+	CPU 0: Dispatched process  2
+[PAGE TABLE] PID=4
+  VA=0000000000000000 PTE=90000001 FPN=1
+[MM-STATS] PID=4 user PGD=1 P4D=1 PUD=1 PMD=1 PT=1 bytes=20480 peak_bytes=20480 walks=4 pt_access=20 data_access=701 total=721
+[MM-STATS] PID=4 user-final PGD=1 P4D=1 PUD=1 PMD=1 PT=1 bytes=20480 peak_bytes=20480 walks=4 pt_access=20 data_access=701 total=721
+	CPU 1 stopped
+Time slot  29
+Time slot  30
+Time slot  31
+	CPU 0: Processed  2 has finished
+[PAGE TABLE] PID=2
+[MM-STATS] PID=2 user PGD=1 P4D=0 PUD=0 PMD=0 PT=0 bytes=4096 peak_bytes=4096 walks=0 pt_access=0 data_access=0 total=0
+[MM-STATS] PID=2 user-final PGD=1 P4D=0 PUD=0 PMD=0 PT=0 bytes=4096 peak_bytes=4096 walks=0 pt_access=0 data_access=0 total=0
+	CPU 0 stopped
+Time slot  32
+[MM-STATS] PID=0 kernel-final PGD=1 P4D=0 PUD=0 PMD=0 PT=0 bytes=4096 peak_bytes=4096 walks=0 pt_access=0 data_access=0 total=0

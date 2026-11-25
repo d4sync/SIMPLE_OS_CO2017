@@ -78,6 +78,17 @@ int run(struct pcb_t *proc)
 	struct inst_t ins = proc->code->text[proc->pc];
 	proc->pc++;
 	int stat = 1;
+#ifdef MM_PAGING
+    /* CPU co 10 register. Kiem tra truoc khi ep arg_t xuong uint32_t. */
+    switch(ins.opcode){
+    case ALLOC:case KMALLOC:case WRITE:if(ins.arg_1>=10)return -1;break;
+    case FREE:if(ins.arg_0>=10)return -1;break;
+    case READ:if(ins.arg_0>=10||ins.arg_2>=10)return -1;break;
+    case COPY_FROM_USER:case COPY_TO_USER:case DMA_MEMCPY:if(ins.arg_0>=10||ins.arg_1>=10)return -1;break;
+    case SYSCALL:if(ins.arg_0>UINT32_MAX)return -1;break;
+    default:break;
+    }
+#endif
 switch (ins.opcode)
 	{
 	case CALC:
@@ -113,7 +124,11 @@ switch (ins.opcode)
 		break;
 	case READ:
 #ifdef MM_PAGING
-		stat = libread(proc, ins.arg_0, ins.arg_1, (uint32_t*) &ins.arg_2);
+		{
+            uint32_t data=0;
+            stat=libread(proc,ins.arg_0,ins.arg_1,&data);
+            if(!stat)proc->regs[ins.arg_2]=data;
+        }
 #else
 		stat = read(proc, ins.arg_0, ins.arg_1, ins.arg_2);
 #endif

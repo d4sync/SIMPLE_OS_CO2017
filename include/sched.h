@@ -1,5 +1,5 @@
-#ifndef QUEUE_H
-#define QUEUE_H
+#ifndef SCHED_H
+#define SCHED_H
 
 #include "common.h"
 
@@ -17,6 +17,7 @@ int queue_empty(void);
 
 void init_scheduler(void);
 void finish_scheduler(void);
+void remove_running_proc(struct pcb_t *proc);
 
 /* Get the next process from ready queue */
 struct pcb_t * get_proc(void);

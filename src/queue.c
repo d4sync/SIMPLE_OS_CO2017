@@ -9,24 +9,23 @@ int empty(struct queue_t *q)
         return (q->size == 0);
 }
 
-void enqueue(struct queue_t *q, struct pcb_t *proc)
+void enqueue(struct queue_t *q,struct pcb_t *p)
 {
-        /* TODO: put a new process to queue [q] */
-;
+    if(!q||!p||q->size>=MAX_QUEUE_SIZE){fprintf(stderr,"Queue overflow/invalid\n");abort();}
+    q->proc[q->size++]=p;
 }
-
 struct pcb_t *dequeue(struct queue_t *q)
 {
-        /* TODO: return a pcb whose prioprity is the highest
-         * in the queue [q] and remember to remove it from q
-         * */
-
-		return NULL;
+    if(empty(q))return NULL;
+    struct pcb_t *p=q->proc[0];
+    for(int i=1;i<q->size;++i)q->proc[i-1]=q->proc[i];
+    q->proc[--q->size]=NULL;return p;
 }
-
-struct pcb_t *purgequeue(struct queue_t *q, struct pcb_t *proc)
+struct pcb_t *purgequeue(struct queue_t *q,struct pcb_t *p)
 {
-        /* TODO: remove a specific item from queue
-         * */
-        return NULL;
+    if(!q)return NULL;
+    for(int i=0;i<q->size;++i)if(q->proc[i]==p){
+        for(int j=i+1;j<q->size;++j)q->proc[j-1]=q->proc[j];
+        q->proc[--q->size]=NULL;return p;
+    }return NULL;
 }
