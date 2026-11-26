@@ -24,14 +24,21 @@ static struct queue_t mlq_ready_queue[MAX_PRIO];
 static int slot[MAX_PRIO];
 #endif
 
+/* 1 if no process is waiting in any ready queue, 0 otherwise. */
 int queue_empty(void) {
+	int is_empty = 1;
+
+	pthread_mutex_lock(&queue_lock);
 #ifdef MLQ_SCHED
 	unsigned long prio;
-	for (prio = 0; prio < MAX_PRIO; prio++)
-		if(!empty(&mlq_ready_queue[prio])) 
-			return -1;
+	for (prio = 0; prio < MAX_PRIO && is_empty; prio++)
+		if (!empty(&mlq_ready_queue[prio]))
+			is_empty = 0;
 #endif
-	return (empty(&ready_queue) && empty(&run_queue));
+	if (is_empty)
+		is_empty = empty(&ready_queue) && empty(&run_queue);
+	pthread_mutex_unlock(&queue_lock);
+	return is_empty;
 }
 
 void init_scheduler(void) {
@@ -163,10 +170,9 @@ struct pcb_t * get_proc(void) {
 void put_proc(struct pcb_t * proc) {
 	if (proc == NULL) return;
 
+	pthread_mutex_lock(&queue_lock);
 	proc->krnl->ready_queue = &ready_queue;
 	proc->krnl->running_list = &running_list;
-
-	pthread_mutex_lock(&queue_lock);
 	purgequeue(&running_list, proc);
 	enqueue(&run_queue, proc);
 	pthread_mutex_unlock(&queue_lock);
@@ -174,10 +180,10 @@ void put_proc(struct pcb_t * proc) {
 
 void add_proc(struct pcb_t * proc) {
 	if (proc == NULL) return;
-	proc->krnl->ready_queue = &ready_queue;
-	proc->krnl->running_list = &running_list;
 
 	pthread_mutex_lock(&queue_lock);
+	proc->krnl->ready_queue = &ready_queue;
+	proc->krnl->running_list = &running_list;
 	enqueue(&ready_queue, proc);
 	pthread_mutex_unlock(&queue_lock);	
 }
