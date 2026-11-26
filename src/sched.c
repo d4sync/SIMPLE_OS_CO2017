@@ -49,6 +49,15 @@ void init_scheduler(void) {
 	pthread_mutex_init(&queue_lock, NULL);
 }
 
+void remove_running_proc(struct pcb_t *proc)
+{
+	if (proc == NULL)
+		return;
+	pthread_mutex_lock(&queue_lock);
+	purgequeue(&running_list, proc);
+	pthread_mutex_unlock(&queue_lock);
+}
+
 #ifdef MLQ_SCHED
 /* 
  *  Stateful design for routine calling

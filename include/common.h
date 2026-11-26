@@ -115,7 +115,8 @@ struct pcb_t
 	uint32_t prio;
 #endif
 	struct mm_struct *mm;
-	struct krnl_t *krnl;	
+	struct krnl_t *krnl;
+	struct pcb_t *registry_next;	
 	struct page_table_t *page_table; // Page table
 	uint32_t bp;			 // Break pointer
 };
@@ -123,6 +124,8 @@ struct pcb_t
 /* Kernel structure */
 struct krnl_t
 {
+	struct pcb_t *processes; /* Registry kernel, bao ve boi mm_lock */
+	addr_t kernel_base;
 	struct queue_t *ready_queue;
 	struct queue_t *running_list;
 #ifdef MLQ_SCHED

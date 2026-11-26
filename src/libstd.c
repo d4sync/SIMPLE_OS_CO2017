@@ -17,7 +17,7 @@ int libsyscall (struct pcb_t *caller,
              arg_t a2,
              arg_t a3)
 {
-   struct sc_regs regs;
+   struct sc_regs regs = {0};
 
 	/*
 	 * @bksysnet: Please note that the architecture design of

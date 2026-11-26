@@ -99,11 +99,7 @@ $(OBJ)/dma_c_testbench_dma.o: src/dma_c_testbench.cpp ${HEADER} $(OBJ)
 	$(CXX_MAKE) $(CXXFLAGS) -DDEBUG_ENABLED=1 -DDMA_MAIN=1 $< -o $@
 
 # Compile syscall
-syscalltbl.lst: $(SRC)/syscall.tbl
-	@echo $(OS_OBJ)
-	chmod +x $(SRC)/syscalltbl.sh
-	$(SRC)/syscalltbl.sh $< $(SRC)/$@
-#	mv $(OBJ)/syscalltbl.lst $(INCLUDE)/
+syscalltbl.lst: src/syscalltbl.lst
 
 # Compile the whole OS simulation
 os: $(OBJ) syscalltbl.lst $(OS_OBJ)
@@ -133,5 +129,22 @@ $(OBJ):
 
 clean:
 	rm -f $(SRC)/*.lst
-	rm -f $(OBJ)/*.o os sched mem pdg dma_testbench *.vcd
+	rm -f $(OBJ)/*.o os os-mm test-mm-bin sched mem pdg dma_testbench *.vcd
 	rm -rf $(OBJ)
+
+# CPU-only integration tests: no Verilator dependency, DMA returns ENOSYS.
+.PHONY: os-mm test-mm
+MM_SRC = cpu mem loader queue os sched timer mm-vm mm64 mm mm-memphy libstd libmem syscall sys_mem sys_listsyscall
+os-mm: src/syscalltbl.lst
+	$(CC) $(INC) -std=gnu11 -g -Wall -Wextra -DOSSIM_NO_DMA $(addprefix src/,$(addsuffix .c,$(MM_SRC))) -pthread -o os-mm
+
+src/syscalltbl.lst: src/syscall.tbl src/syscalltbl.sh
+	sh src/syscalltbl.sh $< $@
+
+$(OBJ)/syscall.o: src/syscalltbl.lst
+
+MM_TEST_SRC = cpu mem mm-vm mm64 mm-memphy libstd libmem syscall sys_mem sys_listsyscall
+MM_TEST_FLAGS ?= -g -Wall -Wextra
+test-mm: src/syscalltbl.lst
+	$(CC) $(INC) -std=gnu11 $(MM_TEST_FLAGS) tests/test_mm.c $(addprefix src/,$(addsuffix .c,$(MM_TEST_SRC))) -pthread -o test-mm-bin
+	./test-mm-bin

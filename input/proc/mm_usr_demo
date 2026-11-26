@@ -1,0 +1,17 @@
+1 16
+alloc 8193 0
+alloc 8193 1
+write 165 0 4095
+write 254 0 4096
+kmalloc 8193 2
+copy_from_user 0 2 4095 2
+copy_to_user 2 1 4095 2
+read 1 4095 8
+read 1 4096 9
+syscall 0
+free 2
+free 0
+alloc 8193 3
+read 3 4095 8
+free 3
+free 1

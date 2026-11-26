@@ -8,92 +8,55 @@
  * for the sole purpose of studying while attending the course CO2018.
  */
 
-#include "os-mm.h"
+#include "mm64.h"
 #include "syscall.h"
 #include "libmem.h"
-#include "queue.h"
-#include <stdlib.h>
+#include <errno.h>
+#include <limits.h>
 
-#ifdef MM64
-#include "mm64.h"
-#else
-#include "mm.h"
-#endif
-
-//typedef char BYTE;
-
-static struct pcb_t *find_proc_by_pid(struct krnl_t *krnl, uint32_t pid) 
-{ 
-    //hàm mới viết, lục hết mớ pid trên kernel trả pcb của pid
-    //lý do là vì user chỉ có truyền pid nên ta sẽ tìm pcb
-   int i;
-
-   if (krnl == NULL || krnl->running_list == NULL)
-      return NULL;
-   for (i = 0; i < krnl->running_list->size; i++)
-   {
-      struct pcb_t *p = krnl->running_list->proc[i];
-      if (p != NULL && p->pid == pid)
-         return p;
-   }
-   return NULL;
-}
-
-int __sys_memmap(struct krnl_t *krnl, uint32_t pid, struct sc_regs* regs)
+int __sys_memmap(struct krnl_t *krnl,uint32_t pid,struct sc_regs *r)
 {
-   int memop = regs->a1;
-   int ret = 0; // giá trị sẽ trả về từ cái hàm này, lúc đầu mặc định luôn là 0
-   BYTE value;
-   struct pcb_t *caller; //pcb của tiến trình đang gọi syscall
-   /* 
-    * TODO THIS DUMMY CREATE EMPTY PROC TO AVOID COMPILER NOTIFY 
-    *      need to be eliminated
-	
-   struct pcb_t *caller = malloc(sizeof(struct pcb_t));
-   caller->krnl = malloc(sizeof(struct krnl_t));
-    */
-   /*
-    * @bksysnet: Please note in the dual spacing design
-    *            syscall implementations are in kernel space.
-    */
-
-   /* TODO: Traverse proclist to terminate the proc
-    *       stcmp to check the process match proc_name
-    */
-
-    /* TODO Maching and marking the process */
-    /* user process are not allowed to access directly pcb in kernel space of syscall */
-    //....
-
-    // theo ý hiểu là bây giờ cần tìm pcb real từ pid, lấy pcb đó đưa cho cái bên dưới
-    caller = find_proc_by_pid(krnl, pid); // đi tìm
-    if (caller == NULL)
-        return -1; // không thấy trả -1
-
-
-   switch (memop) {
-   case SYSMEM_MAP_OP:
-            /* Reserved process case*/
-			vmap_pgd_memset(caller, regs->a2, regs->a3);
-            break;
-   case SYSMEM_INC_OP:
-            ret=inc_vma_limit(caller, regs->a2, regs->a3); // giờ cần tìm hiểu cái này
-            break;
-   case SYSMEM_SWP_OP:
-            __mm_swap_page(caller, regs->a2, regs->a3);
-            break;
-   case SYSMEM_IO_READ:
-            MEMPHY_read(krnl->mram, regs->a2, &value);
-            regs->a3 = value;
-            break;
-   case SYSMEM_IO_WRITE:
-            MEMPHY_write(krnl->mram, regs->a2, regs->a3);
-            break;
-   default:
-            printf("Memop code: %d\n", memop);
-            ret = -1;
-            break;
-   }
-   
-   return ret;
+    struct pcb_t *p=mm_lookup(krnl,pid);
+    if(!p)return -ESRCH;
+    BYTE b;
+    switch(r->a1){
+    case SYSMEM_MAP_OP:
+        if(r->a3>INT_MAX)return -EINVAL;
+        return vmap_pgd_memset(p,r->a2,(int)r->a3);
+    case SYSMEM_INC_OP:
+        if(r->a2>INT_MAX)return -EINVAL;
+        return inc_vma_limit(p,(int)r->a2,r->a3);
+    case SYSMEM_SWP_OP:
+        if(!(r->flags&SC_INTERNAL))return -EPERM;
+        return __mm_swap_page(p,r->a2,r->a3);
+    case SYSMEM_IO_READ:
+    case SYSMEM_IO_WRITE:
+        /* Lenh syscall truc tiep tu user khong duoc doc/ghi raw physical.
+         * Wrapper da kiem tra region va translate truoc khi gui IO. */
+        if(!(r->flags&SC_INTERNAL)||!MEMPHY_owned(krnl->mram,r->a2/4096,p->mm))return -EPERM;
+        if(r->a1==SYSMEM_IO_WRITE)return MEMPHY_write(krnl->mram,r->a2,(BYTE)r->a3);
+        if(MEMPHY_read(krnl->mram,r->a2,&b))return -EFAULT;
+        r->a3=(unsigned char)b;return 0;
+    case SYSMEM_REGION_ALLOC:
+    case SYSMEM_REGION_FREE:
+    case SYSMEM_REGION_READ:
+    case SYSMEM_REGION_WRITE:
+    case SYSMEM_KMALLOC:
+    case SYSMEM_COPY_FROM:
+    case SYSMEM_COPY_TO:
+        if(!(r->flags&SC_INTERNAL) || r->a2>=10)return -EPERM;
+        switch(r->a1){
+        case SYSMEM_REGION_ALLOC:return __alloc(p,0,(int)r->a2,r->a3,&r->a6);
+        case SYSMEM_REGION_FREE:return __free(p,0,(int)r->a2);
+        case SYSMEM_REGION_READ:
+            if(__read(p,0,(int)r->a2,r->a3,&b))return -EFAULT;
+            r->a6=(unsigned char)b;return 0;
+        case SYSMEM_REGION_WRITE:return __write(p,0,(int)r->a2,r->a3,(BYTE)r->a4);
+        case SYSMEM_KMALLOC:return __kmalloc(p,0,(int)r->a2,r->a3,&r->a6)==0 ? 0:-ENOMEM;
+        default:
+            if(r->a3>=10)return -EINVAL;
+            return mm_copy_region(p,(uint32_t)r->a2,(uint32_t)r->a3,r->a4,r->a5,r->a1==SYSMEM_COPY_FROM);
+        }
+    default:return -EINVAL;
+    }
 }
