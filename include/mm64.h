@@ -76,6 +76,26 @@ int mm_map_pages(struct pcb_t *proc, struct mm_struct *mm, addr_t va,
                  addr_t count, int contiguous);
 int mm_unmap_pages(struct pcb_t *proc, struct mm_struct *mm, addr_t va, addr_t count);
 int mm_translate(struct mm_struct *mm, addr_t va, addr_t *pa, int write);
+
+/* Page replacement (FIFO, RAM <-> active SWAP).
+ * mm_swap_init: enable swapping for this kernel (call once at boot).
+ * mm_translate_fault: like mm_translate, but a swapped-out page is
+ *                     brought back to RAM first (page fault service). */
+void mm_swap_init(struct krnl_t *kernel);
+int mm_translate_fault(struct krnl_t *kernel, struct mm_struct *mm,
+                       addr_t va, addr_t *pa, int write);
+void MEMPHY_track(struct memphy_struct *mp, addr_t fpn,
+                  struct mm_struct *owner, addr_t pgn);
+int MEMPHY_pin(struct memphy_struct *mp, addr_t fpn, int delta);
+struct framephy_struct *MEMPHY_pick_victim(struct memphy_struct *mp,
+                                           struct mm_struct *kernel_mm);
+
+/* DMA mapper: resolve and pin the physical runs of two regions of PID. */
+struct dma_mapping;
+int mm_dma_map(struct krnl_t *kernel, uint32_t pid, uint32_t src_region,
+               uint32_t dst_region, uint32_t offset, uint32_t bytes,
+               struct dma_mapping *mapping);
+
 void mm_destroy(struct mm_struct *mm, struct memphy_struct *ram);
 void mm_stats(struct mm_struct *mm, unsigned pid, const char *space);
 int MEMPHY_get_contiguous(struct memphy_struct *mp, addr_t count, addr_t *first);

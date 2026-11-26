@@ -13,6 +13,7 @@
 #include "mm64.h"
 #include "syscall.h"
 #include "libmem.h"
+#include "dma.h"
 #include <stdlib.h>
 #include <string.h>
 #include <inttypes.h>
@@ -82,7 +83,7 @@ int __alloc(struct pcb_t *p,int id,int reg,addr_t size,addr_t *out)
     }
     /* Xoa data cu khi tai su dung free region, tranh ro ri noi dung. */
     for(addr_t a=r.rg_start;a<r.rg_end;){addr_t pa;
-        if(mm_translate(p->mm,a,&pa,0))goto done;
+        if(mm_translate_fault(p->krnl,p->mm,a,&pa,0))goto done;
         addr_t n=4096-(a&4095);if(n>r.rg_end-a)n=r.rg_end-a;
         memset(p->krnl->mram->storage+pa,0,n);a+=n;p->mm->data_accesses+=n;
     }
@@ -119,7 +120,8 @@ static int access_byte(struct pcb_t *p,int id,int reg,unsigned mode,addr_t off,B
     if(!b||!region_ok(r,id,mode,off,1))return -1;
     struct mm_struct *mm=mode?p->mm:p->krnl->mm;
     addr_t pa;int rc;
-    if(mm_translate(mm,r->rg_start+off,&pa,write)||!MEMPHY_owned(p->krnl->mram,pa/4096,mm))return -1;
+    /* Page fault: a swapped-out page is brought back before the access. */
+    if(mm_translate_fault(p->krnl,mm,r->rg_start+off,&pa,write)||!MEMPHY_owned(p->krnl->mram,pa/4096,mm))return -1;
     if(mode){arg_t data=0;rc=memcall(p,write?SYSMEM_IO_WRITE:SYSMEM_IO_READ,pa,write?(unsigned char)*b:0,&data);if(!rc&&!write)*b=(BYTE)data;}
     else rc=write?MEMPHY_write(p->krnl->mram,pa,*b):MEMPHY_read(p->krnl->mram,pa,b);
     if(!rc)++mm->data_accesses;
@@ -201,10 +203,90 @@ done:mm_unlock();return rc;
 }
 int libkmem_copy_from_user(struct pcb_t *p,uint32_t src,uint32_t dst,addr_t off,addr_t size){return region_call(p,SYSMEM_COPY_FROM,src,dst,off,size,NULL);}
 int libkmem_copy_to_user(struct pcb_t *p,uint32_t src,uint32_t dst,addr_t off,addr_t size){return region_call(p,SYSMEM_COPY_TO,src,dst,off,size,NULL);}
+/*
+ * DMA_MEMCPY (asynchronous)
+ * The instruction only submits the request through syscall 17 and returns.
+ * The DMA worker thread drives the RTL engine on physical addresses; the CPU
+ * keeps running other work. The PID's next memory instruction waits (see
+ * cpu.c) until the completion callback has released the pinned frames.
+ */
 int libmem_dma_memcpy(struct pcb_t *p,uint32_t src,uint32_t dst,addr_t off,addr_t size)
 {
-    /* DMA RTL thuoc phan co-processor. Khong gia lap thanh cong khi chua tich hop bus. */
-    (void)p;(void)src;(void)dst;(void)off;(void)size;return -ENOSYS;
+    int rc=region_call(p,SYSMEM_DMA_OP,src,dst,off,size,NULL);
+    if(!rc)printf("[DMA-SUBMIT] PID=%u src_reg=%u dst_reg=%u offset=%"PRIu64" size=%"PRIu64"\n",
+                  p->pid,src,dst,off,size);
+    return rc;
+}
+
+/* Frames used by one DMA request; kept pinned until the engine is done. */
+struct dma_pin {
+    struct krnl_t *krnl;
+    uint32_t pid;
+    struct dma_span *spans;
+    size_t nspans;
+    addr_t *frames;
+    size_t nframes;
+};
+
+static void dma_unpin(struct dma_pin *c)
+{
+    for(size_t i=0;i<c->nframes;++i)MEMPHY_pin(c->krnl->mram,c->frames[i],-1);
+    free(c->spans);free(c->frames);free(c);
+}
+
+/* Completion callback, runs on the DMA worker thread. */
+static void dma_release(void *cookie,int status)
+{
+    struct dma_pin *c=cookie;
+    uint32_t pid=c->pid;
+    mm_lock();dma_unpin(c);mm_unlock();
+    /* -EBUSY: channel owned by another PID, the CPU retries the instruction. */
+    if(status!=-EBUSY)printf("[DMA-DONE] PID=%u status=%s\n",pid,status?"failed":"ok");
+}
+
+/* Translate (faulting pages in if needed) and pin one page of a region. */
+static int dma_pin_page(struct dma_pin *c,struct mm_struct *mm,addr_t va,int write,addr_t *pa)
+{
+    if(mm_translate_fault(c->krnl,mm,va,pa,write)||
+       !MEMPHY_owned(c->krnl->mram,*pa/4096,mm)||
+       MEMPHY_pin(c->krnl->mram,*pa/4096,1))return -1;
+    c->frames[c->nframes++]=*pa/4096;
+    return 0;
+}
+
+/* dma_mapper for src/dma.c. Called inside syscall 17 (mm_lock held).
+ * Splits the copy at every page boundary of either side, because frames
+ * of a region are not physically contiguous, and merges adjacent runs. */
+int mm_dma_map(struct krnl_t *k,uint32_t pid,uint32_t src,uint32_t dst,
+               uint32_t off,uint32_t bytes,struct dma_mapping *m)
+{
+    int rc=-EINVAL;
+    mm_lock();
+    struct pcb_t *p=mm_lookup(k,pid);
+    struct vm_rg_struct *s=p?get_symrg_byid(p->mm,src):NULL,*d=p?get_symrg_byid(p->mm,dst):NULL;
+    if(!m||!bytes||!live(s)||!live(d)||s==d||
+       off>s->rg_end-s->rg_start||bytes>s->rg_end-s->rg_start-off||
+       off>d->rg_end-d->rg_start||bytes>d->rg_end-d->rg_start-off){mm_unlock();return rc;}
+    struct mm_struct *ms=s->mode_bit?p->mm:k->mm,*md=d->mode_bit?p->mm:k->mm;
+    size_t cap=2*((size_t)bytes/4096)+4;
+    struct dma_pin *c=calloc(1,sizeof(*c));
+    if(c){c->krnl=k;c->pid=pid;c->spans=calloc(cap,sizeof(*c->spans));c->frames=calloc(2*cap,sizeof(*c->frames));}
+    if(!c||!c->spans||!c->frames){if(c){free(c->spans);free(c->frames);free(c);}mm_unlock();return -ENOMEM;}
+    for(addr_t i=0;i<bytes;){
+        addr_t vs=s->rg_start+off+i,vd=d->rg_start+off+i,ps,pd;
+        addr_t n=4096-(vs&4095);
+        if(4096-(vd&4095)<n)n=4096-(vd&4095);
+        if(bytes-i<n)n=bytes-i;
+        /* Source first; once pinned it cannot be evicted by the dst fault. */
+        if(dma_pin_page(c,ms,vs,0,&ps)||dma_pin_page(c,md,vd,1,&pd)){dma_unpin(c);mm_unlock();return -EFAULT;}
+        struct dma_span *last=c->nspans?&c->spans[c->nspans-1]:NULL;
+        if(last&&last->src+last->bytes==ps&&last->dst+last->bytes==pd)last->bytes+=n;
+        else c->spans[c->nspans++]=(struct dma_span){ps,pd,n};
+        i+=n;
+    }
+    m->spans=c->spans;m->count=c->nspans;m->release=dma_release;m->cookie=c;
+    mm_unlock();
+    return 0;
 }
 int free_pcb_memph(struct pcb_t *p)
 {

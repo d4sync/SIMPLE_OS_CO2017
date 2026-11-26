@@ -19,6 +19,20 @@
 #include <string.h>
 #include <limits.h>
 
+/* The DMA engine writes RAM bytes from its own thread through the system
+ * bus. CPU byte accesses take the same RAM lock (always acquired last). */
+#ifndef OSSIM_NO_DMA
+#include "sysbus.h"
+#define RAM_LOCK()   sysbus_lock_ram()
+#define RAM_UNLOCK() sysbus_unlock_ram()
+#else
+#define RAM_LOCK()   ((void)0)
+#define RAM_UNLOCK() ((void)0)
+#endif
+
+/* Monotonic clock giving the order in which pages entered RAM. */
+static uint64_t map_clock;
+
 /* Free/used list: moi frame chi nam trong mot danh sach.
  * Caller cua cac helper noi bo giu mm_lock de thao tac nguyen tu. */
 int init_memphy(struct memphy_struct *mp, addr_t size, int randomflg)
@@ -44,7 +58,9 @@ int MEMPHY_read(struct memphy_struct *mp, addr_t addr, BYTE *value)
 {
     if (!mp || !value || addr >= (addr_t)mp->maxsz) return -1;
     if (!mp->rdmflg) mp->cursor = (int)addr;
+    RAM_LOCK();
     *value = mp->storage[addr];
+    RAM_UNLOCK();
     return 0;
 }
 
@@ -52,7 +68,9 @@ int MEMPHY_write(struct memphy_struct *mp, addr_t addr, BYTE data)
 {
     if (!mp || addr >= (addr_t)mp->maxsz) return -1;
     if (!mp->rdmflg) mp->cursor = (int)addr;
+    RAM_LOCK();
     mp->storage[addr] = data;
+    RAM_UNLOCK();
     return 0;
 }
 
@@ -75,8 +93,11 @@ int MEMPHY_put_freefp(struct memphy_struct *mp, addr_t fpn)
     while (*p && (*p)->fpn != fpn) p = &(*p)->fp_next;
     if (!*p) return -1; /* Khong double-free frame. */
     struct framephy_struct *fp = *p;
+    if (fp->pin) return -1; /* DMA still uses this frame. */
     *p = fp->fp_next;
     fp->owner = NULL;
+    fp->pgn = 0;
+    fp->stamp = 0;
     p = &mp->free_fp_list;
     while (*p && (*p)->fpn < fpn) p = &(*p)->fp_next;
     fp->fp_next = *p;
@@ -122,6 +143,46 @@ int MEMPHY_owned(struct memphy_struct *mp, addr_t fpn, struct mm_struct *owner)
     for (struct framephy_struct *p = mp->used_fp_list; p; p = p->fp_next)
         if (p->fpn == fpn) return p->owner == owner;
     return 0;
+}
+
+/* Record which virtual page now lives in FPN; restarts its FIFO age. */
+void MEMPHY_track(struct memphy_struct *mp, addr_t fpn,
+                  struct mm_struct *owner, addr_t pgn)
+{
+    for (struct framephy_struct *p = mp->used_fp_list; p; p = p->fp_next)
+        if (p->fpn == fpn) {
+            p->owner = owner;
+            p->pgn = pgn;
+            p->stamp = ++map_clock;
+            return;
+        }
+}
+
+/* Add DELTA (+1 or -1) to the pin count of a used frame. */
+int MEMPHY_pin(struct memphy_struct *mp, addr_t fpn, int delta)
+{
+    for (struct framephy_struct *p = mp ? mp->used_fp_list : NULL; p; p = p->fp_next)
+        if (p->fpn == fpn) {
+            if (p->pin + delta < 0) return -1;
+            p->pin += delta;
+            return 0;
+        }
+    return -1;
+}
+
+/* FIFO page replacement: the oldest user page that is not pinned.
+ * Frames owned by KERNEL_MM (kernel space) are never swapped out. */
+struct framephy_struct *MEMPHY_pick_victim(struct memphy_struct *mp,
+                                           struct mm_struct *kernel_mm)
+{
+    struct framephy_struct *victim = NULL;
+    for (struct framephy_struct *p = mp ? mp->used_fp_list : NULL; p; p = p->fp_next) {
+        if (!p->owner || p->owner == kernel_mm || p->pin || !p->stamp)
+            continue;
+        if (!victim || p->stamp < victim->stamp)
+            victim = p;
+    }
+    return victim;
 }
 
 int MEMPHY_dump(struct memphy_struct *mp)

@@ -132,7 +132,10 @@ int main(void)
     struct sc_regs regs={0};
     assert(_syscall(&k,1,0,&regs)==0);
     assert(_syscall(&k,999,0,&regs)==-ESRCH);
-    assert(_syscall(&k,1,440,&regs)==-ENOSYS);
+    /* 440 is now the section 1.6.3 example syscall; 101 is unregistered. */
+    assert(_syscall(&k,1,101,&regs)==-ENOSYS);
+    regs.a1=1; assert(_syscall(&k,1,440,&regs)==0);
+    regs.a1=0;
     regs.a1=99; assert(_syscall(&k,1,17,&regs)==-EINVAL);
     regs.a1=SYSMEM_IO_READ;regs.a2=pa;
     assert(_syscall(&k,1,17,&regs)==-EPERM);
@@ -180,14 +183,16 @@ int main(void)
     assert(MEMPHY_read(&swap,swap.maxsz,&byte)!=0);
     assert(MEMPHY_put_freefp(&swap,sf)==0);
     mm_unlock();
-    puts("PASS 09 swap frame copy (not automatic page replacement)");
+    puts("PASS 09 SWP_OP frame copy primitive (automatic replacement: test 12)");
 
     struct inst_t ins={.opcode=READ,.arg_0=0,.arg_1=4096,.arg_2=9};
     struct code_seg_t code={.text=&ins,.size=1};
     p.code=&code;p.pc=0;
     assert(run(&p)==0 && p.regs[9]==0xfe);
-    ins.arg_2=20;p.pc=0;assert(run(&p)!=0);
-    puts("PASS 10 CPU READ writes destination register; rejects register 20");
+    /* Register 20 does not exist: the read succeeds, nothing is stored. */
+    p.regs[9]=0;ins.arg_2=20;p.pc=0;assert(run(&p)==0 && p.regs[9]==0);
+    ins.arg_0=20;p.pc=0;assert(run(&p)!=0);
+    puts("PASS 10 CPU READ writes destination register; register 20 ignored, region 20 rejected");
 
     destroy_proc(&p);destroy_proc(&q);
     assert(!ram.used_fp_list && count_frames(ram.free_fp_list)==32);
@@ -199,7 +204,38 @@ int main(void)
     for(int i=0;i<4;++i)destroy_proc(&ps[i]);
     assert(!ram.used_fp_list && count_frames(ram.free_fp_list)==32);
     puts("PASS 11 concurrent allocations, no shared frame and complete cleanup");
+
+    /* 12: FIFO page replacement. RAM holds 2 frames, the processes touch 4
+     * pages; data must survive swap-out/swap-in, slots must be returned. */
+    {
+        struct krnl_t k2 = {.kernel_base=KERNEL_BASE_DEFAULT};
+        struct memphy_struct ram2, swap2;
+        struct memphy_struct *swaps2[4] = {&swap2, NULL, NULL, NULL};
+        struct mm_struct kernel2;
+        struct pcb_t r, s;
+        uint32_t v;
+        assert(init_memphy(&ram2, 2 * 4096, 1) == 0);
+        assert(init_memphy(&swap2, 8 * 4096, 1) == 0);
+        k2.mram=&ram2;k2.mswp=swaps2;k2.active_mswp=&swap2;k2.mm=&kernel2;
+        assert(init_mm(&kernel2, NULL) == 0);
+        mm_swap_init(&k2);
+        setup_proc(&r,&k2,20);setup_proc(&s,&k2,21);
+        assert(liballoc(&r,3*4096,0)==0);          /* 3 pages > 2 frames */
+        assert(r.mm->swap_outs>=1);
+        for(int i=0;i<3;++i)assert(libwrite(&r,(BYTE)(0x30+i),0,(addr_t)i*4096+7)==0);
+        assert(liballoc(&s,4096,0)==0 && libwrite(&s,0x55,0,1)==0);
+        for(int i=0;i<3;++i)assert(libread(&r,0,(addr_t)i*4096+7,&v)==0 && v==0x30u+i);
+        assert(libread(&s,0,1,&v)==0 && v==0x55);
+        assert(r.mm->swap_ins>=1 && count_frames(ram2.used_fp_list)==2);
+        destroy_proc(&r);destroy_proc(&s);
+        assert(!ram2.used_fp_list && !swap2.used_fp_list);
+        assert(count_frames(swap2.free_fp_list)==8);
+        mm_swap_init(NULL);
+        mm_destroy(&kernel2,&ram2);MEMPHY_destroy(&ram2);MEMPHY_destroy(&swap2);
+    }
+    puts("PASS 12 FIFO page replacement: swap-out/in keeps data, slots released");
+
     mm_destroy(&kernel,&ram);MEMPHY_destroy(&ram);MEMPHY_destroy(&swap);
-    puts("ALL 11 TEST GROUPS PASSED");
+    puts("ALL 12 TEST GROUPS PASSED");
     return 0;
 }

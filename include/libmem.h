@@ -25,6 +25,8 @@
 #define SYSMEM_KMALLOC 10
 #define SYSMEM_COPY_FROM 11
 #define SYSMEM_COPY_TO 12
+/* Asynchronous DMA copy between two regions of the caller (co-processor). */
+#define SYSMEM_DMA_OP 13
 int mm_copy_region(struct pcb_t*, uint32_t, uint32_t, addr_t, addr_t, unsigned);
 
 extern struct vm_area_struct *get_vma_by_num(struct mm_struct *mm, int vmaid);

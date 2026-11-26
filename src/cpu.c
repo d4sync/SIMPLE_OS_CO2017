@@ -13,6 +13,8 @@
 #include "mm.h"
 #include "syscall.h"
 #include "libmem.h"
+#include "dma.h"
+#include <errno.h>
 
 int calc(struct pcb_t *proc)
 {
@@ -76,6 +78,13 @@ int run(struct pcb_t *proc)
 	}
 
 	struct inst_t ins = proc->code->text[proc->pc];
+#if defined(MM_PAGING) && !defined(OSSIM_NO_DMA)
+	/* Asynchronous DMA: CALC keeps running while the engine copies, but a
+	 * memory instruction of this PID waits (retried on a later slot) until
+	 * the transfer completed, so it never sees a half-copied buffer. */
+	if (ins.opcode != CALC && dma_pending(proc->pid))
+		return -EBUSY;
+#endif
 	proc->pc++;
 	int stat = 1;
 #ifdef MM_PAGING
@@ -83,7 +92,7 @@ int run(struct pcb_t *proc)
     switch(ins.opcode){
     case ALLOC:case KMALLOC:case WRITE:if(ins.arg_1>=10)return -1;break;
     case FREE:if(ins.arg_0>=10)return -1;break;
-    case READ:if(ins.arg_0>=10||ins.arg_2>=10)return -1;break;
+    case READ:if(ins.arg_0>=10)return -1;break;
     case COPY_FROM_USER:case COPY_TO_USER:case DMA_MEMCPY:if(ins.arg_0>=10||ins.arg_1>=10)return -1;break;
     case SYSCALL:if(ins.arg_0>UINT32_MAX)return -1;break;
     default:break;
@@ -113,6 +122,8 @@ switch (ins.opcode)
 		break;
 	case DMA_MEMCPY:
 		stat = libmem_dma_memcpy(proc, ins.arg_0, ins.arg_1, ins.arg_2, ins.arg_3);
+		if (stat == -EBUSY)
+			proc->pc--; /* The only DMA channel is busy: retry later. */
 		break;
 #endif
 	case FREE:
@@ -127,7 +138,12 @@ switch (ins.opcode)
 		{
             uint32_t data=0;
             stat=libread(proc,ins.arg_0,ins.arg_1,&data);
-            if(!stat)proc->regs[ins.arg_2]=data;
+            /* Only 10 registers exist. Some sample programs (p0s) name
+             * register 20: the memory read is still valid, the value is
+             * just not stored. */
+            if(!stat && ins.arg_2<10)proc->regs[ins.arg_2]=data;
+            else if(!stat)printf("[READ] PID=%u destination register %u out of range 0..9, value not stored\n",
+                                 proc->pid,(unsigned)ins.arg_2);
         }
 #else
 		stat = read(proc, ins.arg_0, ins.arg_1, ins.arg_2);

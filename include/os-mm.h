@@ -115,6 +115,8 @@ struct mm_struct {
 
    struct vm_area_struct *mmap;
    uint64_t tables[5], peak_tables, walks, pt_accesses, data_accesses;
+   /* Page replacement statistics (swap-in = page fault serviced from SWAP). */
+   uint64_t swap_ins, swap_outs;
 
    /* Currently we support a fixed number of symbol */
    struct vm_rg_struct symrgtbl[PAGING_MAX_SYMTBL_SZ];
@@ -137,6 +139,14 @@ struct framephy_struct {
 
    /* Resereed for tracking allocated framed */
    struct mm_struct* owner;
+
+   /* Reverse mapping used by page replacement:
+    * pgn   - virtual page number mapped to this frame inside owner
+    * stamp - time the page was brought into RAM (FIFO victim order)
+    * pin   - > 0 while a DMA transfer uses the frame (never evicted) */
+   addr_t pgn;
+   uint64_t stamp;
+   int pin;
 };
 
 struct memphy_struct {

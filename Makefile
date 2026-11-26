@@ -48,6 +48,7 @@ CXX_MAKE = $(CXX) -iquote include -I$(VERILATOR_ROOT)/include -I$(VERILATOR_ROOT
 # Object files needed by modules
 MEM_OBJ = $(addprefix $(OBJ)/, paging.o mem.o cpu.o loader.o)
 SYSCALL_OBJ = $(addprefix $(OBJ)/, syscall.o  sys_mem.o sys_listsyscall.o)
+SYSCALL_OBJ += $(addprefix $(OBJ)/, sys_xxxhandler.o)
 OS_OBJ = $(addprefix $(OBJ)/, cpu.o mem.o loader.o queue.o os.o sched.o timer.o mm-vm.o mm64.o mm.o mm-memphy.o libstd.o libmem.o)
 OS_OBJ += $(SYSCALL_OBJ)
 
@@ -61,14 +62,12 @@ VDMA_GLOBAL_FAST = verilated verilated_dpi verilated_vcd_c verilated_threads
 VDMA_OBJ_FAST = $(addprefix $(OBJ)/, $(addsuffix .o, $(VDMA_CLASSES_FAST) $(VDMA_SUPPORT_FAST) $(VDMA_GLOBAL_FAST)))
 VDMA_OBJ_SLOW = $(addprefix $(OBJ)/, $(addsuffix .o, $(VDMA_CLASSES_SLOW) $(VDMA_SUPPORT_SLOW)))
 
-# User C++ classes
-VDMA_USER_CLASSES = dpi_rtl sysbus dma_c_testbench
-VDMA_USER_OBJ = $(addprefix $(OBJ)/, $(addsuffix .o, $(VDMA_USER_CLASSES)))
-
-# For OS target: dma_c_testbench compiled with DMA_MAIN=0 (default)
-VDMA_USER_OBJ_OS = $(OBJ)/dpi_rtl.o $(OBJ)/sysbus.o $(OBJ)/dma_c_testbench.o
-# For DMA target: dma_c_testbench compiled with DMA_MAIN=1
-VDMA_USER_OBJ_DMA = $(OBJ)/dpi_rtl.o $(OBJ)/sysbus.o $(OBJ)/dma_c_testbench_dma.o
+# DMA driver shared by the OS and the standalone testbench:
+#   dpi_rtl.cpp drives the Verilator model, sysbus.c is the bus/RAM bank,
+#   dma.c is the asynchronous channel (worker thread + completion callback).
+VDMA_USER_OBJ_OS = $(OBJ)/dpi_rtl.o $(OBJ)/sysbus.o $(OBJ)/dma.o
+# Standalone testbench adds a main() (DMA_MAIN=1)
+VDMA_USER_OBJ_DMA = $(VDMA_USER_OBJ_OS) $(OBJ)/dma_c_testbench_dma.o
 
 VDMA_OBJ_OS = $(VDMA_OBJ_FAST) $(VDMA_OBJ_SLOW) $(VDMA_USER_OBJ_OS)
 VDMA_OBJ_DMA = $(VDMA_OBJ_FAST) $(VDMA_OBJ_SLOW) $(VDMA_USER_OBJ_DMA)
@@ -91,8 +90,8 @@ sched: $(SCHED_OBJ)
 
 # Compile DMA testbench with C 
 # define DMA_MAIN=1 in src/dma_c_testbench.cpp to enable main()
-dma: $(OBJ) $(VDMA_OBJ_FAST) $(VDMA_OBJ_SLOW) $(OBJ)/dpi_rtl.o $(OBJ)/sysbus.o $(OBJ)/dma_c_testbench_dma.o
-	$(CXX) $(LFLAGS) $(VDMA_OBJ_FAST) $(VDMA_OBJ_SLOW) $(OBJ)/dpi_rtl.o $(OBJ)/sysbus.o $(OBJ)/dma_c_testbench_dma.o -o dma_testbench $(LIB)
+dma: $(OBJ) $(VDMA_OBJ_DMA)
+	$(CXX) $(LFLAGS) $(VDMA_OBJ_DMA) -o dma_testbench $(LIB)
 
 # Compile dma_c_testbench with DMA_MAIN=1 for standalone testbench
 $(OBJ)/dma_c_testbench_dma.o: src/dma_c_testbench.cpp ${HEADER} $(OBJ)
@@ -110,10 +109,6 @@ $(OBJ)/%.o: %.c ${HEADER} $(OBJ)
 
 $(OBJ)/%.o: %.cpp ${HEADER} $(OBJ)
 	$(CXX_MAKE) $(CXXFLAGS) -DDEBUG_ENABLED=1 $< -o $@
-
-# Compile dma_c_testbench for OS target with DMA_MAIN=0 (library mode)
-$(OBJ)/dma_c_testbench.o: src/dma_c_testbench.cpp ${HEADER} $(OBJ)
-	$(CXX_MAKE) $(CXXFLAGS) -DDEBUG_ENABLED=1 -DDMA_MAIN=0 $< -o $@
 
 # Verilated
 $(OBJ)/verilated.o: $(VERILATOR_ROOT)/include/verilated.cpp
@@ -134,7 +129,7 @@ clean:
 
 # CPU-only integration tests: no Verilator dependency, DMA returns ENOSYS.
 .PHONY: os-mm test-mm
-MM_SRC = cpu mem loader queue os sched timer mm-vm mm64 mm mm-memphy libstd libmem syscall sys_mem sys_listsyscall
+MM_SRC = cpu mem loader queue os sched timer mm-vm mm64 mm mm-memphy libstd libmem syscall sys_mem sys_listsyscall sys_xxxhandler
 os-mm: src/syscalltbl.lst
 	$(CC) $(INC) -std=gnu11 -g -Wall -Wextra -DOSSIM_NO_DMA $(addprefix src/,$(addsuffix .c,$(MM_SRC))) -pthread -o os-mm
 
@@ -143,8 +138,14 @@ src/syscalltbl.lst: src/syscall.tbl src/syscalltbl.sh
 
 $(OBJ)/syscall.o: src/syscalltbl.lst
 
-MM_TEST_SRC = cpu mem mm-vm mm64 mm-memphy libstd libmem syscall sys_mem sys_listsyscall
+MM_TEST_SRC = cpu mem mm-vm mm64 mm-memphy libstd libmem syscall sys_mem sys_listsyscall sys_xxxhandler
 MM_TEST_FLAGS ?= -g -Wall -Wextra
 test-mm: src/syscalltbl.lst
-	$(CC) $(INC) -std=gnu11 $(MM_TEST_FLAGS) tests/test_mm.c $(addprefix src/,$(addsuffix .c,$(MM_TEST_SRC))) -pthread -o test-mm-bin
+	$(CC) $(INC) -std=gnu11 $(MM_TEST_FLAGS) -DOSSIM_NO_DMA tests/test_mm.c $(addprefix src/,$(addsuffix .c,$(MM_TEST_SRC))) -pthread -o test-mm-bin
 	./test-mm-bin
+
+# DMA co-processor: RTL self-test of the standalone testbench (needs Verilator)
+.PHONY: test-dma
+test-dma: dma
+	./dma_testbench
+	./dma_testbench 0x1000 0x2000 1024

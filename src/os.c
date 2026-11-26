@@ -29,7 +29,7 @@
 #include <limits.h>
 
 #include "sysbus.h"
-#include "dpi_rtl.h"
+#include "dma.h"
 
 static int time_slot;
 static int num_cpus;
@@ -78,7 +78,12 @@ static void * cpu_routine(void * args) {
 		 	* ready queue */
 			proc = get_proc();
 			time_left = 0;
-		}else if (proc->pc == proc->code->size) {
+		}else if (proc->pc == proc->code->size
+#ifndef OSSIM_NO_DMA
+			  /* Its frames stay pinned until the DMA callback ran. */
+			  && !dma_pending(proc->pid)
+#endif
+			  ) {
 			/* The porcess has finish it job */
 			printf("\tCPU %d: Processed %2d has finished\n",
 				id ,proc->pid);
@@ -115,7 +120,8 @@ static void * cpu_routine(void * args) {
 		/* Run current process */
 		if(proc->pc < proc->code->size){
             int rc=run(proc);
-            if(rc)printf("[INSTRUCTION-ERROR] PID=%u PC=%u opcode=%d rc=%d\n",proc->pid,proc->pc-1,proc->code->text[proc->pc-1].opcode,rc);
+            /* -EBUSY: waiting for its DMA transfer, not an error. */
+            if(rc && rc!=-EBUSY)printf("[INSTRUCTION-ERROR] PID=%u PC=%u opcode=%d rc=%d\n",proc->pid,proc->pc-1,proc->code->text[proc->pc-1].opcode,rc);
         }
 		time_left--;
 		next_slot(timer_id);
@@ -125,26 +131,8 @@ static void * cpu_routine(void * args) {
 }
 
 
-#ifndef OSSIM_NO_DMA
-static void * co_processor(void *arg) {
-    (void)arg;
-    /* TODO: Initialize the internal Verilator RTL simulation.
-	 *       This is necessary to ensure that the RTL simulation is ready for DPI calls.
-      */
-    if (rtl_dma_init_simulation() != 0) {
-        printf("Cannot initialize RTL simulation\n");
-        return (void*)1;
-    }
-	
-	/* TODO: This asynchronous implementation of DMA
-     *        DMA completion callback is not yet implemented in this testbench
-     */
-    // Install callback handler
-    //dma_done_callback();  // Call the callback to signal DMA completion
-    return NULL;
-}
-
-#endif
+/* The co-processor thread lives in src/dma.c (dma_start/dma_stop): it owns
+ * the Verilator RTL model and serves one DMA request at a time. */
 
 static void * ld_routine(void * args) {
 #ifdef MM_PAGING
@@ -162,6 +150,8 @@ static void * ld_routine(void * args) {
     if(init_mm(os.mm,NULL)){fprintf(stderr,"Kernel MM init failed\n");exit(1);}
     os.mm->mmap->vm_start=os.mm->mmap->vm_end=os.mm->mmap->sbrk=os.kernel_base;
     os.krnl_pgd=os.mm->pgd;
+    /* Page replacement RAM <-> active SWAP (FIFO). */
+    mm_swap_init(&os);
 	while (i < num_processes) {
 		struct pcb_t * proc = load(ld_processes.path[i]);
 		proc->krnl = &os;
@@ -242,9 +232,6 @@ int main(int argc, char * argv[]) {
 	read_config(path);
 
 	pthread_t * cpu = (pthread_t*)malloc(num_cpus * sizeof(pthread_t));
-	#ifndef OSSIM_NO_DMA
-    pthread_t dma;
-#endif
 	struct cpu_args * args =
 		(struct cpu_args*)malloc(sizeof(struct cpu_args) * num_cpus);
 	pthread_t ld;
@@ -268,6 +255,15 @@ int main(int argc, char * argv[]) {
 	/* Create MEM RAM */
 	if(init_memphy(&mram,memramsz,rdmflag)){fprintf(stderr,"RAM init failed\n");return 1;}
     printf("[MM-CONFIG] RAM=%lu page=4096 usable_frames=%lu kernel_base=%016"PRIx64"\n",memramsz,memramsz/4096>8192?8192:memramsz/4096,os.kernel_base);
+#ifndef OSSIM_NO_DMA
+	/* Bus addressing: the DMA engine sees the simulated RAM as bank 0 and
+	 * works on physical addresses produced by the MMU mapper. */
+	dma_set_mapper(mm_dma_map);
+	if (memory_bank_attach((uint8_t *)mram.storage, memramsz) || dma_start()) {
+		fprintf(stderr, "Cannot start DMA on simulated RAM\n");
+		return 1;
+	}
+#endif
 
         /* Create all MEM SWAP */ 
 	int sit;
@@ -304,11 +300,6 @@ int main(int argc, char * argv[]) {
 			cpu_routine, (void*)&args[i]);
 	}
 
-	/* Run co-processor */
-	#ifndef OSSIM_NO_DMA
-    pthread_create(&dma,NULL,co_processor,NULL);
-#endif
-
 	/* Wait for CPU and loader finishing */
 	for (i = 0; i < num_cpus; i++) {
 		pthread_join(cpu[i], NULL);
@@ -318,7 +309,9 @@ int main(int argc, char * argv[]) {
 	/* Stop timer */
 	stop_timer();
 #ifndef OSSIM_NO_DMA
-    pthread_join(dma,NULL);
+	/* Drains accepted work, then releases the RTL model and the bus. */
+	dma_stop();
+	memory_bank_cleanup();
 #endif
     mm_stats(os.mm,0,"kernel-final");
     mm_destroy(os.mm,&mram);free(os.mm);

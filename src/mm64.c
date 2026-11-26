@@ -160,6 +160,140 @@ int pte_set_swap(struct pcb_t *caller, addr_t pgn, int type, addr_t off)
     return pte_set_entry(caller->mm,pgn,e,caller);
 }
 
+/*
+ * Page replacement
+ * ----------------
+ * Policy : FIFO over every user page resident in RAM (global, all PIDs).
+ *          Kernel pages and frames pinned by an ongoing DMA are never
+ *          chosen. The age of a page is the time it entered RAM.
+ * Swap out: copy the victim frame to a free slot of the active SWAP device,
+ *          rewrite the victim PTE as "swapped" (type = swap device id,
+ *          offset = slot), then release the RAM frame.
+ * Swap in : on access to a swapped PTE, get a RAM frame (evicting another
+ *          page if needed), copy the slot back, free the slot and mark the
+ *          PTE present again.
+ * Every caller already holds mm_lock (all memory work runs inside the
+ * syscall 17 handlers), so no extra locking is needed here.
+ */
+static struct krnl_t *swap_krnl;
+
+void mm_swap_init(struct krnl_t *kernel)
+{
+    swap_krnl = kernel;
+}
+
+static int swap_enabled(struct krnl_t *k)
+{
+    return k && k == swap_krnl && k->mram && k->active_mswp &&
+           k->active_mswp->maxsz >= PAGING64_PAGESZ;
+}
+
+/* PID owning MM, only used to make the trace readable. */
+static unsigned pid_of_mm(struct krnl_t *k, struct mm_struct *mm)
+{
+    for (struct pcb_t *p = k ? k->processes : NULL; p; p = p->registry_next)
+        if (p->mm == mm)
+            return p->pid;
+    return 0;
+}
+
+static int swap_out_one(struct krnl_t *k)
+{
+    struct memphy_struct *ram = k->mram, *swp = k->active_mswp;
+    struct framephy_struct *victim = MEMPHY_pick_victim(ram, k->mm);
+    addr_t slot, entry, va;
+
+    if (!victim)
+        return -1;
+    if (MEMPHY_get_freefp(swp, &slot))
+        return -1;                       /* SWAP device is full. */
+    if (__swap_cp_page(ram, victim->fpn, swp, slot) ||
+        init_pte(&entry, 0, 0, 0, 1, k->active_mswp_id, slot) ||
+        pte_set_entry(victim->owner, victim->pgn, entry, NULL)) {
+        MEMPHY_put_freefp(swp, slot);
+        return -1;
+    }
+
+    struct mm_struct *mm = victim->owner;
+    addr_t fpn = victim->fpn;
+    MEMPHY_set_owner(swp, slot, mm);
+    ++mm->swap_outs;
+    if (va_from_pgn(victim->pgn, &va))
+        va = victim->pgn << 12;
+#ifdef IODUMP
+    printf("[SWAP-OUT] PID=%u VA=%016" PRIx64 " FPN=%" PRIu64
+           " -> SWP%u slot=%" PRIu64 "\n",
+           pid_of_mm(k, mm), va, fpn, k->active_mswp_id, slot);
+#endif
+    MEMPHY_put_freefp(ram, fpn);
+    return 0;
+}
+
+/* RAM frame for a user page. Evict a victim when RAM is exhausted. Frames
+ * above the 13-bit FPN limit of the PTE format are treated as unusable. */
+static int get_user_frame(struct krnl_t *k, addr_t *fpn)
+{
+    for (int tries = 0; tries < 2; ++tries) {
+        if (!MEMPHY_get_freefp(k->mram, fpn)) {
+            if (*fpn <= PAGING_PTE_FPN_MASK)
+                return 0;
+            MEMPHY_put_freefp(k->mram, *fpn);
+        }
+        if (!swap_enabled(k) || swap_out_one(k))
+            return -1;
+    }
+    return -1;
+}
+
+static void free_swap_slot(struct krnl_t *k, addr_t entry)
+{
+    unsigned type = PAGING_PTE_SWPTYP(entry);
+    if (k && k->mswp && type < PAGING_MAX_MMSWP && k->mswp[type])
+        MEMPHY_put_freefp(k->mswp[type], PAGING_PTE_SWP(entry));
+}
+
+static int swap_in(struct krnl_t *k, struct mm_struct *mm, addr_t va)
+{
+    addr_t *e = walk(mm, va, 0, 0), entry, fpn, present;
+    if (!e || PAGING_PAGE_PRESENT(*e) || !(*e & PAGING_PTE_SWAPPED_MASK))
+        return -1;
+    entry = *e;
+
+    unsigned type = PAGING_PTE_SWPTYP(entry);
+    addr_t slot = PAGING_PTE_SWP(entry);
+    if (type >= PAGING_MAX_MMSWP || !k->mswp[type])
+        return -1;
+    /* May evict another page; never this one (it is not in RAM). */
+    if (get_user_frame(k, &fpn))
+        return -1;
+    if (__swap_cp_page(k->mswp[type], slot, k->mram, fpn) ||
+        init_pte(&present, 1, fpn, 0, 0, 0, 0) ||
+        pte_set_entry(mm, va >> 12, present, NULL)) {
+        MEMPHY_put_freefp(k->mram, fpn);
+        return -1;
+    }
+    MEMPHY_put_freefp(k->mswp[type], slot);
+    MEMPHY_track(k->mram, fpn, mm, va >> 12);
+    ++mm->swap_ins;
+#ifdef IODUMP
+    printf("[SWAP-IN]  PID=%u VA=%016" PRIx64 " SWP%u slot=%" PRIu64
+           " -> FPN=%" PRIu64 "\n", pid_of_mm(k, mm), va & ~UINT64_C(4095),
+           type, slot, fpn);
+#endif
+    return 0;
+}
+
+int mm_translate_fault(struct krnl_t *k, struct mm_struct *mm, addr_t va,
+                       addr_t *pa, int write)
+{
+    addr_t *e = walk(mm, va, 0, 0);
+    if (e && !PAGING_PAGE_PRESENT(*e) && (*e & PAGING_PTE_SWAPPED_MASK)) {
+        if (!swap_enabled(k) || swap_in(k, mm, va))
+            return -1;
+    }
+    return mm_translate(mm, va, pa, write);
+}
+
 /* Rollback neu RAM het hoac calloc bang trang that bai. FPN 13 bit
  * gioi han RAM anh xa 8192 frame; khong cat mat bit cao cua FPN. */
 int mm_map_pages(struct pcb_t *proc, struct mm_struct *mm, addr_t va, addr_t count, int contiguous)
@@ -173,12 +307,13 @@ int mm_map_pages(struct pcb_t *proc, struct mm_struct *mm, addr_t va, addr_t cou
     if (contiguous && MEMPHY_get_contiguous(ram,count,&first)) return -1;
     for (;i<count;++i) {
         addr_t fpn=first+i;
-        if (!contiguous && MEMPHY_get_freefp(ram,&fpn)) break;
+        /* User pages may evict an older page to SWAP (page replacement). */
+        if (!contiguous && get_user_frame(proc->krnl,&fpn)) break;
         if (fpn>PAGING_PTE_FPN_MASK || pte_set_fpn(mm,(va>>12)+i,fpn,proc)) {
             if (!contiguous) MEMPHY_put_freefp(ram,fpn);
             break;
         }
-        MEMPHY_set_owner(ram,fpn,mm);
+        MEMPHY_track(ram,fpn,mm,(va>>12)+i);
     }
     if (i==count) return 0;
     mm_unmap_pages(proc,mm,va,i);
@@ -190,6 +325,7 @@ int mm_unmap_pages(struct pcb_t *proc, struct mm_struct *mm, addr_t va, addr_t c
     for (addr_t i=0;i<count;++i) {
         addr_t pgn=(va>>12)+i, e=pte_get_entry(mm,pgn,proc);
         if (PAGING_PAGE_PRESENT(e)) MEMPHY_put_freefp(proc->krnl->mram,PAGING_FPN(e));
+        else if (e & PAGING_PTE_SWAPPED_MASK) free_swap_slot(proc->krnl,e);
         pte_set_entry(mm,pgn,0,proc);
     }
     return 0;
@@ -215,14 +351,15 @@ int vmap_pgd_memset(struct pcb_t *caller, addr_t va, int count)
     addr_t bytes=(addr_t)count*4096;
     if (va==v->vm_end) return inc_vma_limit(caller,0,bytes);
     if (va<v->vm_start || va>v->vm_end || bytes>v->vm_end-va) return -1;
+    /* Every page must be mapped (present or swapped) before touching any. */
+    for (int i=0;i<count;++i)
+        if (!pte_get_entry(caller->mm,(va>>12)+i,caller)) return -1;
+    /* Fault in and clear one page at a time: faulting page i+1 may evict
+     * page i, so translate and clear in the same step. */
     for (int i=0;i<count;++i) {
         addr_t pa;
-        if (mm_translate(caller->mm,va+(addr_t)i*4096,&pa,0) ||
+        if (mm_translate_fault(caller->krnl,caller->mm,va+(addr_t)i*4096,&pa,1) ||
             !MEMPHY_owned(caller->krnl->mram,pa/4096,caller->mm)) return -1;
-    }
-    for (int i=0;i<count;++i) {
-        addr_t pa;
-        mm_translate(caller->mm,va+(addr_t)i*4096,&pa,1);
         memset(caller->krnl->mram->storage+pa,0,4096);
         caller->mm->data_accesses+=4096;
     }
@@ -255,7 +392,7 @@ addr_t vmap_page_range(struct pcb_t *proc, addr_t va, int count, struct framephy
     int i=0;
     for (p=frames;i<count;p=p->fp_next,++i) {
         if (pte_set_fpn(proc->mm,(va>>12)+i,p->fpn,proc)) break;
-        MEMPHY_set_owner(proc->krnl->mram,p->fpn,proc->mm);
+        MEMPHY_track(proc->krnl->mram,p->fpn,proc->mm,(va>>12)+i);
     }
     if (i<count) { for(int j=0;j<i;++j) pte_set_entry(proc->mm,(va>>12)+j,0,proc); return (addr_t)-1; }
     *rg=(struct vm_rg_struct){.mode_bit=1,.rg_start=va,.rg_end=va+(addr_t)count*4096};
@@ -309,6 +446,7 @@ static void destroy_table(addr_t *t,int level,struct memphy_struct *ram)
     for(int i=0;i<512;++i) if(t[i]) {
         if(level)destroy_table((addr_t *)(uintptr_t)t[i],level-1,ram);
         else if(PAGING_PAGE_PRESENT(t[i]))MEMPHY_put_freefp(ram,PAGING_FPN(t[i]));
+        else if(t[i]&PAGING_PTE_SWAPPED_MASK)free_swap_slot(swap_krnl,t[i]);
     }
     free(t);
 }
@@ -323,14 +461,17 @@ void mm_destroy(struct mm_struct *mm,struct memphy_struct *ram)
 void mm_stats(struct mm_struct *mm,unsigned pid,const char *space)
 {
     uint64_t n=0;for(int i=0;i<5;++i)n+=mm->tables[i];
-    printf("[MM-STATS] PID=%u %s PGD=%"PRIu64" P4D=%"PRIu64" PUD=%"PRIu64" PMD=%"PRIu64" PT=%"PRIu64" bytes=%"PRIu64" peak_bytes=%"PRIu64" walks=%"PRIu64" pt_access=%"PRIu64" data_access=%"PRIu64" total=%"PRIu64"\n",pid,space,mm->tables[4],mm->tables[3],mm->tables[2],mm->tables[1],mm->tables[0],n*512*sizeof(addr_t),mm->peak_tables*512*sizeof(addr_t),mm->walks,mm->pt_accesses,mm->data_accesses,mm->pt_accesses+mm->data_accesses);
+    printf("[MM-STATS] PID=%u %s PGD=%"PRIu64" P4D=%"PRIu64" PUD=%"PRIu64" PMD=%"PRIu64" PT=%"PRIu64" bytes=%"PRIu64" peak_bytes=%"PRIu64" walks=%"PRIu64" pt_access=%"PRIu64" data_access=%"PRIu64" total=%"PRIu64" swap_in=%"PRIu64" swap_out=%"PRIu64"\n",pid,space,mm->tables[4],mm->tables[3],mm->tables[2],mm->tables[1],mm->tables[0],n*512*sizeof(addr_t),mm->peak_tables*512*sizeof(addr_t),mm->walks,mm->pt_accesses,mm->data_accesses,mm->pt_accesses+mm->data_accesses,mm->swap_ins,mm->swap_outs);
 }
 static void dump_table(addr_t *t,int level,addr_t prefix,addr_t start,addr_t end)
 {
     for(int i=0;i<512;++i)if(t[i]){
         addr_t va=prefix|((addr_t)i<<(12+9*level));
         if(level)dump_table((addr_t *)(uintptr_t)t[i],level-1,va,start,end);
-        else {if(va&(UINT64_C(1)<<56))va|=UINT64_C(0xfe00000000000000);if(va>=start&&va<=end)printf("  VA=%016"PRIx64" PTE=%08"PRIx64" FPN=%"PRIu64"\n",va,t[i],(addr_t)PAGING_FPN(t[i]));}
+        else {if(va&(UINT64_C(1)<<56))va|=UINT64_C(0xfe00000000000000);if(va>=start&&va<=end){
+            if(PAGING_PAGE_PRESENT(t[i]))printf("  VA=%016"PRIx64" PTE=%08"PRIx64" FPN=%"PRIu64"\n",va,t[i],(addr_t)PAGING_FPN(t[i]));
+            else printf("  VA=%016"PRIx64" PTE=%08"PRIx64" SWAPPED SWP%"PRIu64" slot=%"PRIu64"\n",va,t[i],(addr_t)PAGING_PTE_SWPTYP(t[i]),(addr_t)PAGING_PTE_SWP(t[i]));
+        }}
     }
 }
 int print_pgtbl(struct pcb_t *p,addr_t start,addr_t end)

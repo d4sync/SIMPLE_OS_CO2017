@@ -12,19 +12,22 @@ make os-mm
 make test-mm
 ```
 
-`os-mm` là bản OS chạy các module C thực tế, không link RTL. Không có stub giả lập thành công DMA: `DMA_MEMCPY` trả `-ENOSYS` (-38). `test-mm` chạy assertion của các hàm bộ nhớ, syscall và CPU, không yêu cầu Verilator.
+`os-mm` là bản OS chạy các module C thực tế, không link RTL (build với `-DOSSIM_NO_DMA`): riêng `DMA_MEMCPY` trả `-ENOSYS` (-38). Bản đầy đủ `./os` (có Verilator) chạy DMA thật, xem mục 13. `test-mm` chạy assertion của các hàm bộ nhớ, swap, syscall và CPU, không yêu cầu Verilator.
 
 ```bash
 # Kiểm thử memory safety của các module chính
 make test-mm MM_TEST_FLAGS='-g -O1 -fsanitize=address,undefined -fno-omit-frame-pointer'
 
-# Full build trên VM môn học có phiên bản Verilator tương thích model Vdma_top gốc
+# Full build có DMA RTL (cần Verilator, đã thử với Verilator 5.032 trên Ubuntu WSL)
 make clean
-make os
+make all
 ./os os_mm_usr_demo
+./os os_dma_demo      # DMA bất đồng bộ, 2 process tranh 1 kênh
+./os os_swap_demo     # RAM 2 frame, thay thế trang FIFO
+make test-dma         # testbench RTL độc lập của DMA
 ```
 
-Full build đã được thử trong môi trường thực hiện nhưng dừng vì thiếu `verilated.h`. Không thể xác nhận full RTL build hoặc DMA trong môi trường này. Không cần thay đổi file generated Vdma_top; hãy dùng VM môn học. Xem `tests/results/` để đọc log thực tế. `make os-mm` có thể hiển thị warning unused parameter từ `src/mem.c` legacy, không phải lỗi build.
+Không cần thay đổi file generated Vdma_top. `make os-mm` có thể hiển thị warning unused parameter từ `src/mem.c` legacy, không phải lỗi build. Log trong `tests/results/` là log cũ của nhánh 2412009 (trước khi có swap/DMA).
 
 ## 2. Cấu trúc và file thay đổi
 
@@ -128,7 +131,7 @@ Sau đó `alloc 100 1` có VA 300 và dùng cùng frame. Free list chứa `[400,
 
 ### 7.1. Dispatcher và operation
 
-`src/syscall.tbl` giữ syscall 0 listsyscall và 17 memmap; `syscalltbl.sh` sinh `src/syscalltbl.lst`. `_syscall` giữ recursive mutex, tra `mm_lookup(krnl,pid)` rồi dispatch. PID không tồn tại -> `-ESRCH`, syscall chưa đăng ký -> `-ENOSYS`, operation sai -> `-EINVAL`. `libsyscall` zero-init register arguments, không set `SC_INTERNAL`.
+`src/syscall.tbl` giữ syscall 0 listsyscall, 17 memmap và thêm 440 xxx (`src/sys_xxxhandler.c`, ví dụ mục 1.6.3 của đề); `syscalltbl.sh` sinh `src/syscalltbl.lst`. `_syscall` giữ recursive mutex, tra `mm_lookup(krnl,pid)` rồi dispatch. PID không tồn tại -> `-ESRCH`, syscall chưa đăng ký -> `-ENOSYS`, operation sai -> `-EINVAL`. `libsyscall` zero-init register arguments, không set `SC_INTERNAL`.
 
 | a1 | Operation | Tham số / hành vi |
 |---|---|---|
@@ -153,22 +156,33 @@ User lower canonical: `0x0000000000000000` tới `0x00ffffffffffffff`; kernel ba
 
 Một race ví dụ: CPU0 và CPU1 đồng thời thấy free list đầu là FPN 0; không lock, cả hai map cùng frame, CPU0 WRITE 165 làm CPU1 READ thấy 165 dù khác process. Với lock, chuyển free->used và map là một transaction. Test 11: 4 pthread x 100 vòng alloc/write/read/free, kiểm tra kết quả riêng từng PID, tổng số frame used và tất cả frame được trả sau destroy.
 
-## 9. Page Replacement – phạm vi chủ ý
+## 9. Page Replacement (FIFO, RAM <-> SWAP)
 
-PDF p.26: optional page replacement tùy giảng viên. Hiện không có thông báo nên không bật FIFO hay tự động swap-in/swap-out. Đã có init SWAP, frame list, PTE swapped encoding và `__swap_cp_page`/SWP primitive; test 09 xác nhận copy một frame đến SWAP. Không gọi `find_victim_page` tự động; không tuyên bố có eviction/page-in. Khi hết RAM, ALLOC/KMALLOC trả lỗi và rollback, không loop vô hạn. Với RAM 2048 byte, không có page 4096 byte nào, nên các ALLOC fail đúng thiết kế. Nếu sau này yêu cầu page replacement, cần victim queue toàn hệ thống (chỉ user, không kernel pinned), owner/PTE reverse mapping, swap slot allocation, update PTE, page fault/swap-in, giải phóng swap slot và synchronization. Không chỉ bật một macro để coi như xong.
+Code: `src/mm64.c` (phần "Page replacement"), `src/mm-memphy.c` (`MEMPHY_track`, `MEMPHY_pin`, `MEMPHY_pick_victim`). Bật bằng `mm_swap_init(&os)` trong `ld_routine`.
+
+- **Reverse mapping:** mỗi frame RAM đang dùng ghi `owner` (mm), `pgn` (page ảo) và `stamp` (thời điểm page vào RAM). Nhờ vậy chọn victim mà không cần duyệt mọi bảng trang.
+- **Chính sách:** FIFO toàn hệ thống (mọi PID): victim là page user có `stamp` nhỏ nhất. Page kernel (owner = `krnl->mm`) và frame đang bị DMA ghim (`pin > 0`) không bao giờ bị chọn.
+- **Swap out** (`swap_out_one`): lấy slot trống ở SWAP đang active, copy frame sang (`__swap_cp_page`), ghi PTE victim thành swapped (bit 30, type = id thiết bị swap ở bit 0–4, offset = slot ở bit 5–25), trả frame RAM.
+- **Khi nào swap out:** `get_user_frame` hết frame RAM (hoặc frame vượt giới hạn FPN 13 bit) khi map page user mới hoặc khi swap in.
+- **Page fault / swap in** (`mm_translate_fault`): mọi truy cập dữ liệu (READ/WRITE, COPY, zero-fill của ALLOC, MAP, DMA mapper) dịch địa chỉ bằng hàm này; nếu PTE là swapped thì lấy frame (có thể đẩy page khác ra), copy slot về, trả slot, đặt PTE present.
+- **Dọn dẹp:** unmap/destroy trả cả frame RAM lẫn slot SWAP. Toàn bộ chạy trong handler syscall 17 nên đã giữ `mm_lock`.
+- **Thống kê:** `[MM-STATS] ... swap_in= swap_out=`; mỗi lần swap đều log `[SWAP-OUT]` / `[SWAP-IN]` (khi bật IODUMP), bảng trang in `SWAPPED SWPx slot=y`.
+- **Giới hạn:** page 4096 B nên RAM < 4096 B (config `small_1K`, `os_syscall` có RAM 1024/2048) không có frame nào; swap không giúp được vì cần ít nhất 1 frame. Mỗi truy cập byte cần page có mặt, nên 1 frame vẫn đủ chạy (nhưng thrashing).
+
+Test 12 trong `tests/test_mm.c` (RAM 2 frame, 2 process dùng 4 page) và `./os os_swap_demo` kiểm tra dữ liệu còn nguyên sau swap out/in và mọi slot được trả.
 
 ## 10. Kiểm thử và đọc output
 
-`make test-mm`: 11 nhóm test với assert (xem `tests/test_mm.c`), gồm canonical/index/PTE, FPN0/bounds, isolation, coalescing, kernel contiguous/copy/mode, PID/syscall, rollback, high address sparse/prune, SWP copy, CPU register, concurrency/cleanup.
+`make test-mm`: 12 nhóm test với assert (xem `tests/test_mm.c`), gồm canonical/index/PTE, FPN0/bounds, isolation, coalescing, kernel contiguous/copy/mode, PID/syscall, rollback, high address sparse/prune, SWP copy, CPU register, concurrency/cleanup, FIFO page replacement.
 
 `./os-mm os_mm_usr_demo`: hai process chạy cùng code, từng PID đọc 165 ở offset 4095 và 254 ở 4096 sau copy qua kernel; sau FREE/ALLOC lại, đọc 0 ở offset 4095. Không có `[INSTRUCTION-ERROR]`. Kết quả xen kẽ khác nhau do CPU scheduling. `[VMA]` show data segment + active/free region; `[PAGE TABLE]` show VA/PTE/FPN; `[MM-STATS]` show storage/access; `[INSTRUCTION-ERROR]` show PID, PC, opcode, rc. Log có thể lớn khi IODUMP/PAGETBL_DUMP bật trong os-cfg.h.
 
-Các config gốc giữ byte-for-byte. p0s có READ tới register 20 (PDF p.5 chỉ cho 0..9) và WRITE/READ vùng 2/3 chưa ALLOC. m0s có write offset 1000 vào region 100 byte. m2s chứa DMA_MEMCPY, copy vào reg chưa cấp phát và copy ngược chiều; sc2/3 gọi syscall 101/440 chưa đăng ký. Những lỗi đó được báo, không sửa input để che lỗi. Một số run multi-CPU RAM nhỏ khác nhau số lỗi do thứ tự CPU; không dùng output mẫu làm golden byte-for-byte. Chỉ khẳng định các config gốc chạy tới khi kết thúc, không khẳng định mọi instruction thành công.
+Các config gốc giữ byte-for-byte. p0s có READ tới register 20 (PDF p.5 chỉ cho 0..9): phép đọc vẫn thực hiện, giá trị không được lưu và có dòng cảnh báo (không tính là lỗi); WRITE/READ vùng 2/3 chưa ALLOC thì báo lỗi. m0s có write offset 1000 vào region 100 byte. m2s copy vào reg chưa cấp phát và free reg 3 chưa cấp phát; DMA_MEMCPY của m2s nay chạy thật. sc3 gọi syscall 440 (đã thêm theo mục 1.6.3 của đề), sc2 gọi syscall 101 chưa đăng ký và chạy với RAM 2048 B (< 1 page). Những lỗi đó được báo, không sửa input để che lỗi. Một số run multi-CPU RAM nhỏ khác nhau số lỗi do thứ tự CPU; không dùng output mẫu làm golden byte-for-byte. Chỉ khẳng định các config gốc chạy tới khi kết thúc, không khẳng định mọi instruction thành công.
 
 ## 11. Trả lời vấn đáp (các câu hỏi liên quan)
 
 - **Unified syscall interface ưu/nhược?** Thống nhất ABI, permission/error handling và logging, dễ thêm device và portable user API; nhược: overhead dispatch/context crossing, abstraction có thể không phù hợp thiết bị đặc thù, error semantics khó chuẩn hóa. Trong simulator, overhead chủ yếu lookup, lock, dispatch.
-- **Long-running syscall?** Nếu giữ lock hoặc CPU quá lâu sẽ giảm responsiveness; hệ thật dùng blocking/wakeup, async I/O, interrupt, preemption/cancel. Không giữ MM lock khi đợi DMA hoặc queue. Bản hiện tại serialize CPU copy, không triển khai async DMA.
+- **Long-running syscall?** Nếu giữ lock hoặc CPU quá lâu sẽ giảm responsiveness; hệ thật dùng blocking/wakeup, async I/O, interrupt, preemption/cancel. Không giữ MM lock khi đợi DMA hoặc queue. COPY bằng CPU chạy đồng bộ trong syscall; `dma_memcpy` thì bất đồng bộ (syscall chỉ submit rồi trả về, completion callback báo xong).
 - **Segmentation + paging?** VMA/region theo logical object và permission, paging cấp phát frame rời rạc tránh external fragmentation RAM user; đổi lại internal fragmentation trong page cuối, page table overhead.
 - **N-level paging?** Phân cấp address space rộng, cấp phát nhánh thưa theo nhu cầu; N cấp tăng lookup và metadata; TLB giảm cost nếu triển khai.
 - **Paging vs contiguous?** Paging dễ allocate fragmented RAM và cách ly, có page walk overhead; contiguous dễ DMA/physical linear access, nhưng dễ external fragmentation, yêu cầu tìm run đủ lớn. Bản này user dùng paging, kernel dùng contiguous theo đề.
@@ -182,6 +196,28 @@ Các config gốc giữ byte-for-byte. p0s có READ tới register 20 (PDF p.5 c
 
 1. Bản này dùng MM64/MLQ đang bật, không đảm bảo 32-bit deprecated hoặc non-paging legacy. VMA0 là data segment chính, không mô phỏng nhiều VMA thực tế. Parser chấp nhận cấu hình legacy không có dòng memory bằng default 1 MiB RAM + 16 MiB SWAP; cấu hình explicit ưu tiên. Không cần chỉnh macro MM_FIXED_MEMSZ để đọc testcase cũ.
 2. Scheduler integration sử dụng quota MAX_PRIO-prio và FIFO per priority, giữ queue capacity 50 gốc. Thành viên Scheduler có thể thay phần thuật toán nhưng cần giữ `remove_running_proc` hoặc tương đương, không đăng ký/hủy PID sai thời điểm; registry độc lập với ready/running queue.
-3. Co-processor: giữ Vdma_top, sysbus, dpi_rtl, dma_c_testbench gốc. `mm_translate` là API nội bộ cho DMA partner xây dựng PA/segment. Phải xử lý pinning/lifetime, bus width, async completion; không coi `libmem_dma_memcpy` là hoàn thành. Bản này trả ENOSYS cho instruction đó. Full `make os` cần Verilator tương thích model gốc, và kiểm thử thật trên VM.
-4. 13-bit FPN, kernel virtual bump, no TLB, no page replacement. Có thể nâng cấp sau khi nhóm thống nhất. Cần ghép báo cáo Scheduler và DMA với `docs/report_mm.tex`, điền thông tin nhóm và kết quả đo trên VM trước khi nộp.
+3. Co-processor: driver DMA lấy từ nhánh `feature/dma-verilator` (`src/dma.c`, `src/sysbus.c`, `src/dpi_rtl.cpp`, `src/dma_c_testbench.cpp`), mapper phía bộ nhớ là `mm_dma_map` trong `libmem.c` (mục 13).
+4. 13-bit FPN, kernel virtual bump, no TLB. Có thể nâng cấp sau khi nhóm thống nhất. Cần ghép báo cáo Scheduler và DMA với `docs/report_mm.tex`, điền thông tin nhóm và kết quả đo trên VM trước khi nộp.
 5. Tài liệu giải thích là phần học tập: hãy tự chạy các test, đặt breakpoint tại `__sys_memmap`, `mm_map_pages`, `walk`, `access_byte`, `mm_copy_region` và theo dõi PID/VA/PTE/FPN để có thể trình bày khi demo.
+
+## 13. Co-processor DMA (bất đồng bộ + bus addressing)
+
+Luồng của lệnh `dma_memcpy src dst offset size`:
+
+```text
+CPU run() -> libmem_dma_memcpy -> syscall 17 SYSMEM_DMA_OP (chi PID + region id)
+  -> __sys_memmap -> dma_copy_regions (dma.c)
+     -> mm_dma_map (libmem.c, giu mm_lock):
+          dich tung page cua 2 region (mm_translate_fault), GHIM frame (pin),
+          cat thanh cac "span" vat ly tai bien page cua ca 2 ben
+     -> dma_submit: dua job cho worker, tra ve ngay (CPU chay tiep)
+DMA worker thread (dma.c) -> dpi_rtl_dma_copy (dpi_rtl.cpp) -> RTL Vdma_top
+  -> RTL doc/ghi RAM qua dpi_bank_read32/write32 (sysbus.c, bank 0 = RAM mo phong)
+  -> ch_done -> dma_done_callback -> finish: dma_release go ghim frame, in [DMA-DONE]
+```
+
+- **Bất đồng bộ (1 điểm):** syscall chỉ submit rồi trả về. Trong lúc DMA chạy, CPU vẫn chạy CALC của PID đó và mọi lệnh của PID khác. Lệnh bộ nhớ kế tiếp của cùng PID trả `-EBUSY` và được thử lại ở slot sau (`cpu.c`), nên không bao giờ đọc buffer copy dở. Process chỉ kết thúc khi `dma_pending` = 0 (`os.c`).
+- **Một kênh DMA:** nếu kênh đang bận với PID khác, `dma_submit` trả `-EBUSY`, frame được gỡ ghim, CPU lùi `pc` để thử lại.
+- **Bus addressing (2 điểm):** CPU truy cập qua MMU (bảng trang 5 cấp → địa chỉ vật lý → `MEMPHY_read/write`); co-processor nhận thẳng địa chỉ vật lý từ mapper và truy cập RAM qua system bus (`memory_bank_attach(mram.storage)`). Truy cập byte RAM của CPU và DMA dùng chung `sysbus_lock_ram`.
+- **An toàn với swap:** frame đang DMA bị ghim nên không bị chọn làm victim. Mapper ghim page nguồn trước khi fault page đích để tránh tự đẩy page nguồn ra.
+- **Kiểm thử:** `make test-dma` (testbench RTL độc lập, 17 trường hợp) và `./os os_dma_demo` (2 process, copy trong 1 page, qua biên page, user→kernel rồi `copy_to_user` để đọc lại). Đặt biến môi trường `DMA_TRACE=1` để in từng span trên bus và ghi `rtl_trace.vcd`.

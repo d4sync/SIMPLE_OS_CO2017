@@ -27,7 +27,7 @@ outfile="$2"
 
 nxt=0
 
-grep -E "^[0-9]+[[:space:]]+" "$infile" | sort -n | {
+tr -d '\r' < "$infile" | grep -E "^[0-9]+[[:space:]]+" | sort -n | {
 
 	while read nr name native ; do
 

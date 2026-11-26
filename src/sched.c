@@ -110,11 +110,11 @@ void put_mlq_proc(struct pcb_t * proc) {
 		return;
 	}
 
+	/* krnl is shared by every CPU thread: publish it under the lock. */
+	pthread_mutex_lock(&queue_lock);
 	proc->krnl->ready_queue = &ready_queue;
 	proc->krnl->mlq_ready_queue = mlq_ready_queue;
 	proc->krnl->running_list = &running_list;
-
-	pthread_mutex_lock(&queue_lock);
 	purgequeue(&running_list, proc);
 	enqueue(&mlq_ready_queue[proc->prio], proc);
 	pthread_mutex_unlock(&queue_lock);
@@ -125,11 +125,10 @@ void add_mlq_proc(struct pcb_t * proc) {
 		return;
 	}
 
+	pthread_mutex_lock(&queue_lock);
 	proc->krnl->ready_queue = &ready_queue;
 	proc->krnl->mlq_ready_queue = mlq_ready_queue;
 	proc->krnl->running_list = &running_list;
-       
-	pthread_mutex_lock(&queue_lock);
 	enqueue(&mlq_ready_queue[proc->prio], proc);
 	pthread_mutex_unlock(&queue_lock);	
 }
