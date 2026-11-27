@@ -4,8 +4,8 @@ Time slot   1
 	Loaded a process at input/proc/s3, PID: 1 PRIO: 3
 	CPU 0: Dispatched process  1
 Time slot   2
-Time slot   3
 	Loaded a process at input/proc/m2s, PID: 2 PRIO: 3
+Time slot   3
 	CPU 0: Put process  1 to run queue
 	CPU 0: Dispatched process  2
 [REGION] PID=2 reg=0 mode=user range=[0000000000000000,000000000000012c) sbrk=0000000000001000
@@ -33,31 +33,33 @@ region=400..4096
 Time slot  10
 [REGION] PID=2 reg=2 mode=kernel range=[ff00000000000000,ff000000000000c8)
 [KMALLOC] PID=2 reg=2 VA=ff00000000000000 size=200
+	Loaded a process at input/proc/m2s, PID: 4 PRIO: 2
 Time slot  11
 	CPU 0: Put process  2 to run queue
-	CPU 0: Dispatched process  1
-	Loaded a process at input/proc/m2s, PID: 4 PRIO: 2
-Time slot  12
-Time slot  13
-	CPU 0: Put process  1 to run queue
 	CPU 0: Dispatched process  4
 [REGION] PID=4 reg=0 mode=user range=[0000000000000000,000000000000012c) sbrk=0000000000001000
 region=300..4096
 [ALLOC] PID=4 reg=0 VA=0000000000000000 size=300
-Time slot  14
+Time slot  12
 [REGION] PID=4 reg=1 mode=user range=[000000000000012c,0000000000000190) sbrk=0000000000001000
 region=400..4096
 [ALLOC] PID=4 reg=1 VA=000000000000012c size=100
-Time slot  15
+Time slot  13
 	CPU 0: Put process  4 to run queue
 	CPU 0: Dispatched process  4
 [FREE] PID=4 reg=0 mode=1 range=[0000000000000000,000000000000012c)
 region=0..300
 region=400..4096
-Time slot  16
-	Loaded a process at input/proc/s1, PID: 5 PRIO: 0
+Time slot  14
 [REGION] PID=4 reg=2 mode=kernel range=[ff00000000001000,ff000000000010c8)
 [KMALLOC] PID=4 reg=2 VA=ff00000000001000 size=200
+Time slot  15
+	CPU 0: Put process  4 to run queue
+	CPU 0: Dispatched process  4
+[INSTRUCTION-ERROR] PID=4 PC=4 opcode=8 rc=-38
+	Loaded a process at input/proc/s1, PID: 5 PRIO: 0
+Time slot  16
+[INSTRUCTION-ERROR] PID=4 PC=5 opcode=6 rc=-22
 Time slot  17
 	CPU 0: Put process  4 to run queue
 	CPU 0: Dispatched process  5
@@ -77,35 +79,33 @@ Time slot  24
 	CPU 0: Processed  5 has finished
 [MM-STATS] PID=5 user PGD=1 P4D=0 PUD=0 PMD=0 PT=0 bytes=4096 peak_bytes=4096 walks=0 pt_access=0 data_access=0 total=0
 	CPU 0: Dispatched process  4
-[INSTRUCTION-ERROR] PID=4 PC=4 opcode=8 rc=-38
-Time slot  25
-[INSTRUCTION-ERROR] PID=4 PC=5 opcode=6 rc=-22
-Time slot  26
-	CPU 0: Put process  4 to run queue
-	CPU 0: Dispatched process  4
 [REGION] PID=4 reg=4 mode=kernel range=[ff00000000002000,ff000000000020c8)
 [KMALLOC] PID=4 reg=4 VA=ff00000000002000 size=200
-Time slot  27
+Time slot  25
 [INSTRUCTION-ERROR] PID=4 PC=7 opcode=7 rc=-22
-Time slot  28
+Time slot  26
 	CPU 0: Put process  4 to run queue
 	CPU 0: Dispatched process  4
 [FREE] PID=4 reg=2 mode=0 range=[ff00000000001000,ff000000000010c8)
 region=0..300
 region=400..4096
-Time slot  29
+Time slot  27
 [FREE] PID=4 reg=1 mode=1 range=[000000000000012c,0000000000000190)
 region=0..4096
-Time slot  30
+Time slot  28
 	CPU 0: Put process  4 to run queue
 	CPU 0: Dispatched process  4
 [INSTRUCTION-ERROR] PID=4 PC=10 opcode=2 rc=-1
-Time slot  31
+Time slot  29
 	CPU 0: Processed  4 has finished
 [FREE] PID=4 reg=4 mode=0 range=[ff00000000002000,ff000000000020c8)
 region=0..4096
   VA=0000000000000000 PTE=80000002 FPN=2
 [MM-STATS] PID=4 user PGD=1 P4D=1 PUD=1 PMD=1 PT=1 bytes=20480 peak_bytes=20480 walks=2 pt_access=10 data_access=400 total=410
+	CPU 0: Dispatched process  1
+Time slot  30
+Time slot  31
+	CPU 0: Put process  1 to run queue
 	CPU 0: Dispatched process  3
 Time slot  32
 Time slot  33

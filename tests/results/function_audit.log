@@ -1,15 +1,23 @@
-('src/cpu.c', 6, 6, [], [], [], [])
-('src/libmem.c', 25, 25, [], [], [], [])
-('src/libstd.c', 1, 1, [], [], [], [])
-('src/loader.c', 2, 2, [], [], [], [])
-('src/mm-memphy.c', 10, 10, [], [], [], [])
-('src/mm-vm.c', 5, 5, [], [], [], [])
-('src/mm64.c', 21, 22, [], [], ['vm_map_kernel'], [])
-('src/os.c', 5, 5, [], [], [], [])
-('src/queue.c', 4, 4, [], [], [], [])
-('src/sched.c', 8, 8, [], [], [], [])
-('src/sys_listsyscall.c', 1, 1, [], [], [], [])
-('src/sys_mem.c', 1, 1, [], [], [], [])
-('src/syscall.c', 2, 2, [], [], [], [])
-('src/timer.c', 7, 7, [], [], [], [])
-missing [] changed [] added [] implemented [('src/mm64.c', 'vm_map_kernel')] headerchanges []
+cpu.c: original=6 v2=6 v3=6 | signatures identical | documented=6 | added_definition=[]
+libmem.c: original=25 v2=25 v3=25 | signatures identical | documented=25 | added_definition=[]
+libstd.c: original=1 v2=1 v3=1 | signatures identical | documented=1 | added_definition=[]
+loader.c: original=2 v2=2 v3=2 | signatures identical | documented=2 | added_definition=[]
+mm-memphy.c: original=10 v2=10 v3=10 | signatures identical | documented=10 | added_definition=[]
+mm-vm.c: original=5 v2=5 v3=5 | signatures identical | documented=5 | added_definition=[]
+mm64.c: original=21 v2=22 v3=22 | signatures identical | documented=22 | added_definition=['vm_map_kernel']
+os.c: original=5 v2=5 v3=5 | signatures identical | documented=5 | added_definition=[]
+queue.c: original=4 v2=4 v3=4 | signatures identical | documented=4 | added_definition=[]
+sched.c: original=8 v2=8 v3=8 | signatures identical | documented=8 | added_definition=[]
+sys_listsyscall.c: original=1 v2=1 v3=1 | signatures identical | documented=1 | added_definition=[]
+sys_mem.c: original=1 v2=1 v3=1 | signatures identical | documented=1 | added_definition=[]
+syscall.c: original=2 v2=2 v3=2 | signatures identical | documented=2 | added_definition=[]
+timer.c: original=7 v2=7 v3=7 | signatures identical | documented=7 | added_definition=[]
+Totals: [98, 99, 99] documented= 99 header type changes= []
+input 29 original files byte-identical
+output 14 original files byte-identical
+tests/test_mm.c byte-identical to v2
+queue.c comment-only
+sched.c comment-only
+timer.c comment-only
+Other src files unchanged, including all DMA/RTL/C++ and legacy implementations
+PASS

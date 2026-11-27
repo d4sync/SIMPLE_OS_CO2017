@@ -1,6 +1,6 @@
-# Kết quả kiểm thử thực tế v2
+# Kết quả kiểm thử thực tế v3 — Student Friendly Implementation
 
-Môi trường Linux, GCC, pthread. Chạy trong thư mục root dự án:
+Môi trường Linux, GCC, pthread, Clang AST. Chạy lại trên chính source v3, không dùng log cũ của v2. Chạy trong thư mục root dự án:
 
 ```bash
 make os-mm
@@ -16,7 +16,10 @@ make test-mm MM_TEST_FLAGS='-g -O1 -fsanitize=address,undefined -fno-omit-frame-
 | ASan + UBSan | 12/12 nhóm PASS, không có báo cáo sanitizer |
 | Demo 2 CPU / 2 process | Exit 0, không có instruction error |
 | 14 config gốc | 14/14 exit 0, không đồng nghĩa mọi instruction hợp lệ |
-| Full `make os` | Không hoàn tất: môi trường thiếu `verilated.h` |
+| Full `make os` | Exit 2: thiếu `verilated.h` khi biên dịch RTL |
+| Prototype và comment | 99/99 định nghĩa v2 giữ kiểu; 98/98 hàm gốc giữ kiểu; 99/99 có comment |
+| Input/output gốc | 43/43 byte-identical |
+| Unit test source | Giữ nguyên `tests/test_mm.c` của v2 |
 
 ## Nhóm test
 
@@ -58,3 +61,9 @@ sched_1 exit=0 errors=0
 Demo: mỗi process đọc 165 ở offset 4095, 254 ở offset 4096 sau copy kernel; đọc 0 sau tái cấp phát. Kernel cuối cùng chỉ còn PGD 4096 byte, peak 20480 byte, walks=8, pt_access=40, data_access=8, total=48. Mỗi user trong demo: 20480 byte, walks=18, pt_access=90, data_access=24588, total=24678.
 
 Log thực tế: `tests/results/`. Cần chạy lại trên VM có Verilator và khi ghép với branch nhóm. Không có commit/push lên GitHub từ phiên này.
+
+## Đối chiếu với v2
+
+Số lỗi instruction của cả 15 config (14 gốc + demo) giống v2; 12 nhóm assertion vẫn PASS, không có báo cáo ASan/UBSan. Giá trị và thống kê của demo khớp v2. Điều này là kiểm thử hồi quy theo bộ test có sẵn, không phải chứng minh mọi hành vi đều giống nhau. Build CPU-only có 4 warning unused parameter từ `src/mem.c` legacy không sửa; không có lỗi biên dịch. Full DMA/Verilator chưa kiểm thử được. Các file Scheduler/Timer chỉ thay comment; không sửa thuật toán của v2.
+
+Lệnh thử full build: `make os`; log `tests/results/full-build.log`. Log unit, sanitizer, 15 config, AST audit đều được tạo lại. Không thay đổi repository GitHub.

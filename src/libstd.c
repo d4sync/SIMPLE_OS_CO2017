@@ -1,37 +1,34 @@
 /*
  * Copyright (C) 2026 pdnguyen of HCMC University of Technology VNU-HCM
  */
-
 /* Caitoa release
  * Source Code License Grant: The authors hereby grant to Licensee
  * personal permission to use and modify the Licensed Source Code
  * for the sole purpose of studying while attending the course CO2018.
  */
-
 #include "common.h"
 #include "syscall.h"
 
-int libsyscall (struct pcb_t *caller,
-             uint32_t syscall_idx,
-             arg_t a1,
-             arg_t a2,
-             arg_t a3)
+/* libsyscall — Wrapper instruction SYSCALL từ user; không đặt cờ SC_INTERNAL.
+ * Tham số: caller: PCB user; syscall_idx: số syscall; a1/a2/a3: tham số.
+ * Trả về: Mã kết quả từ _syscall.
+ */
+int libsyscall(struct pcb_t *caller, uint32_t syscall_idx, arg_t a1, arg_t a2, arg_t a3)
 {
-   struct sc_regs regs = {0};
+    struct sc_regs regs = {0};
+    /*
+     * @bksysnet: Please note that the architecture design of
+     *            dual spaces does not allow direct access
+     *            between kernelspace and userspace
+     *            libstd routines are  in userspace with
+     *            their own PCB struct, vals can be passed
+     *            through syscall argument but not the PCB struct.
+     *            This design follows centralized registry as in
+     *            ntkernel but it keeps remain in userspace only.
+     */
+    regs.a1 = a1;
+    regs.a2 = a2;
+    regs.a3 = a3;
 
-	/*
-	 * @bksysnet: Please note that the architecture design of
-	 *            dual spaces does not allow direct access 
-	 *            between kernelspace and userspace
-	 *            libstd routines are  in userspace with 
-	 *            their own PCB struct, vals can be passed
-	 *            through syscall argument but not the PCB struct.
-	 *            This design follows centralized registry as in 
-	 *            ntkernel but it keeps remain in userspace only.
-	 */
-   regs.a1 = a1;
-   regs.a2 = a2;
-   regs.a3 = a3;
-
-   return _syscall(caller->krnl, caller->pid, syscall_idx, &regs);
+    return _syscall(caller->krnl, caller->pid, syscall_idx, &regs);
 }

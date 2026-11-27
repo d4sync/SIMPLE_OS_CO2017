@@ -2,21 +2,22 @@
 Time slot   0
 Time slot   1
 	Loaded a process at input/proc/sc2, PID: 1 PRIO: 15
+Time slot   2
 	CPU 0: Dispatched process  1
 [INSTRUCTION-ERROR] PID=1 PC=0 opcode=1 rc=-1
-Time slot   2
-[INSTRUCTION-ERROR] PID=1 PC=1 opcode=4 rc=-1
 Time slot   3
+[INSTRUCTION-ERROR] PID=1 PC=1 opcode=4 rc=-1
+Time slot   4
 	CPU 0: Put process  1 to run queue
 	CPU 0: Dispatched process  1
 [INSTRUCTION-ERROR] PID=1 PC=2 opcode=4 rc=-1
-Time slot   4
-[INSTRUCTION-ERROR] PID=1 PC=3 opcode=4 rc=-1
 Time slot   5
+[INSTRUCTION-ERROR] PID=1 PC=3 opcode=4 rc=-1
+Time slot   6
 	CPU 0: Put process  1 to run queue
 	CPU 0: Dispatched process  1
 [INSTRUCTION-ERROR] PID=1 PC=4 opcode=9 rc=-38
-Time slot   6
+Time slot   7
 	CPU 0: Processed  1 has finished
 [MM-STATS] PID=1 user PGD=1 P4D=0 PUD=0 PMD=0 PT=0 bytes=4096 peak_bytes=4096 walks=0 pt_access=0 data_access=0 total=0
 	CPU 0 stopped

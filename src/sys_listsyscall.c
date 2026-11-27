@@ -1,20 +1,25 @@
 /*
  * Copyright (C) 2025 pdnguyen of HCMC University of Technology VNU-HCM
  */
-
 /* Sierra release
  * Source Code License Grant: The authors hereby grant to Licensee
  * personal permission to use and modify the Licensed Source Code
  * for the sole purpose of studying while attending the course CO2018.
  */
-
 #include "syscall.h"
 
+/* __sys_listsyscall — In danh sách syscall đã đăng ký trong bảng syscall.
+ * Tham số: krnl: kernel; pid: PID; reg: thanh ghi (không dùng).
+ * Trả về: 0 sau khi in.
+ */
 int __sys_listsyscall(struct krnl_t *krnl, uint32_t pid, struct sc_regs* reg)
 {
-   (void)krnl; (void)pid; (void)reg;
-   for (int i = 0; i < syscall_table_size; i++)
-       printf("%s\n",sys_call_table[i]); 
+    (void)krnl;
+    (void)pid;
+    (void)reg;
+    for (int i = 0; i < syscall_table_size; i++) {
+        printf("%s\n", sys_call_table[i]);
+    }
 
-   return 0;
+    return 0;
 }

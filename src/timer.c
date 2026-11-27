@@ -19,6 +19,11 @@ static int timer_started = 0;
 static atomic_int timer_stop = 0;
 
 
+/* timer_routine — Thread timer chờ mọi thiết bị hoàn thành slot, tăng thời gian và đánh thức
+ * thiết bị.
+ * Tham số: args: đối số thread.
+ * Trả về: Kết thúc thread bằng pthread_exit(args).
+ */
 static void * timer_routine(void * args) {
 	while (!timer_stop) {
 		printf("Time slot %3lu\n", current_time());
@@ -59,6 +64,10 @@ static void * timer_routine(void * args) {
 	pthread_exit(args);
 }
 
+/* next_slot — Báo đã hoàn thành slot và chờ timer cho phép chạy slot kế.
+ * Tham số: timer_id: sự kiện của thiết bị/thread.
+ * Trả về: Không trả giá trị.
+ */
 void next_slot(struct timer_id_t * timer_id) {
 	/* Tell to timer that we have done our job in current slot */
 	pthread_mutex_lock(&timer_id->event_lock);
@@ -75,15 +84,27 @@ void next_slot(struct timer_id_t * timer_id) {
 	pthread_mutex_unlock(&timer_id->event_lock);
 }
 
+/* current_time — Lấy số time slot hiện tại từ bộ đếm atomic.
+ * Tham số: Không có.
+ * Trả về: Số time slot hiện tại.
+ */
 uint64_t current_time() {
 	return _time;
 }
 
+/* start_timer — Khởi chạy thread timer sau khi đã đăng ký các sự kiện.
+ * Tham số: Không có.
+ * Trả về: Không trả giá trị.
+ */
 void start_timer() {
 	timer_started = 1;
 	pthread_create(&_timer, NULL, timer_routine, NULL);
 }
 
+/* detach_event — Đánh dấu thiết bị đã kết thúc và báo timer.
+ * Tham số: event: sự kiện cần kết thúc.
+ * Trả về: Không trả giá trị.
+ */
 void detach_event(struct timer_id_t * event) {
 	pthread_mutex_lock(&event->event_lock);
 	event->fsh = 1;
@@ -91,6 +112,10 @@ void detach_event(struct timer_id_t * event) {
 	pthread_mutex_unlock(&event->event_lock);
 }
 
+/* attach_event — Tạo sự kiện mới và các mutex/condition trước khi timer chạy.
+ * Tham số: Không có.
+ * Trả về: Con trỏ timer_id hoặc NULL nếu timer đã chạy.
+ */
 struct timer_id_t * attach_event() {
 	if (timer_started) {
 		return NULL;
@@ -116,6 +141,10 @@ struct timer_id_t * attach_event() {
 	}
 }
 
+/* stop_timer — Dừng timer, join thread và giải phóng các sự kiện.
+ * Tham số: Không có.
+ * Trả về: Không trả giá trị.
+ */
 void stop_timer() {
 	timer_stop = 1;
 	pthread_join(_timer, NULL);

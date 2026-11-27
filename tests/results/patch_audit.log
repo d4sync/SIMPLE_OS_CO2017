@@ -1,0 +1,1 @@
+PASS: patch applies to v2 and reproduces v3 src/ and include/ byte-for-byte; git diff --check clean.

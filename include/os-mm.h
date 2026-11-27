@@ -55,30 +55,30 @@ struct pgn_t{
  *  Memory region struct
  */
 struct vm_rg_struct {
-   int vmaid;
-   unsigned long mode_bit; /* 1: user, 0: kernel */
+   int vmaid;               /* ID VMA chứa vùng. */
+   unsigned long mode_bit; /* 1: user, 0: kernel; kiểm tra ở handler. */
 
-   addr_t rg_start;
-   addr_t rg_end;
+   addr_t rg_start;         /* Địa chỉ đầu vùng (bao gồm). */
+   addr_t rg_end;           /* Địa chỉ cuối vùng (không bao gồm). */
 
-   struct vm_rg_struct *rg_next;
+   struct vm_rg_struct *rg_next; /* Node tiếp theo trong free list. */
 };
 
 /*
  *  Memory area struct
  */
 struct vm_area_struct {
-   unsigned long vm_id;
-   addr_t vm_start;
-   addr_t vm_end;
+   unsigned long vm_id;     /* ID VMA (bản này dùng VMA 0). */
+   addr_t vm_start;         /* Đầu vùng địa chỉ ảo. */
+   addr_t vm_end;           /* Giới hạn đã map theo page. */
 
-   addr_t sbrk;
+   addr_t sbrk;             /* Break; tăng sau khi map thành công. */
 /*
  * Derived field
  * unsigned long vm_limit = vm_end - vm_start
  */
-   struct mm_struct *vm_mm;
-   struct vm_rg_struct *vm_freerg_list;
+   struct mm_struct *vm_mm; /* Memory manager sở hữu VMA. */
+   struct vm_rg_struct *vm_freerg_list; /* Vùng byte trống, đã sắp xếp. */
    struct vm_area_struct *vm_next;
 };
 
@@ -103,8 +103,8 @@ struct kcache_pool_struct {
  */
 struct mm_struct {
 #ifdef MM64
-   addr_t *pgd;
-   /* Legacy fields: dynamic tree uses child pointers from pgd only. */
+   addr_t *pgd;             /* Root duy nhất của cây bảng trang 5 cấp. */
+   /* Trường legacy: cây động dùng con trỏ trong entry của bảng cha. */
    addr_t *p4d;
    addr_t *pud;
    addr_t *pmd;
@@ -114,12 +114,16 @@ struct mm_struct {
 #endif
 
    struct vm_area_struct *mmap;
-   uint64_t tables[5], peak_tables, walks, pt_accesses, data_accesses;
+   uint64_t tables[5];      /* Số bảng PT, PMD, PUD, P4D, PGD. */
+   uint64_t peak_tables;    /* Tổng số bảng lớn nhất đồng thời. */
+   uint64_t walks;          /* Số lần dịch địa chỉ được tính. */
+   uint64_t pt_accesses;    /* Lượt đọc entry (5 cho mỗi walk thành công). */
+   uint64_t data_accesses;  /* Số byte dữ liệu được đọc/ghi theo quy ước. */
 
-   /* Currently we support a fixed number of symbol */
+   /* Descriptor vùng nhớ cấp phát, truy cập qua register ID. */
    struct vm_rg_struct symrgtbl[PAGING_MAX_SYMTBL_SZ];
 
-   /* list of free page */
+   /* FIFO phục vụ replacement; chưa dùng eviction tự động. */
    struct pgn_t *fifo_pgn;
 
    /* kmem cache pool */
@@ -132,21 +136,21 @@ struct mm_struct {
  * FRAME/MEM PHY struct
  */
 struct framephy_struct { 
-   addr_t fpn;
+   addr_t fpn;              /* Số frame vật lý, có thể bằng 0. */
    struct framephy_struct *fp_next;
 
-   /* Resereed for tracking allocated framed */
+   /* Memory manager sở hữu frame, NULL khi trống. */
    struct mm_struct* owner;
 };
 
 struct memphy_struct {
    /* Basic field of data and size */
-   BYTE *storage;
-   int maxsz;
+   BYTE *storage;           /* Mảng byte mô phỏng thiết bị vật lý. */
+   int maxsz;               /* Số byte của thiết bị. */
    
    /* Sequential device fields */ 
-   int rdmflg;
-   int cursor;
+   int rdmflg;              /* 1: random; 0: sequential. */
+   int cursor;              /* Vị trí truy cập tuần tự. */
 
    /* Management structure */
    struct framephy_struct *free_fp_list;

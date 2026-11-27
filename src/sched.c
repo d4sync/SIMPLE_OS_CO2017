@@ -24,6 +24,10 @@ static struct queue_t mlq_ready_queue[MAX_PRIO];
 static int slot[MAX_PRIO];
 #endif
 
+/* queue_empty — Kiểm tra các ready/run queue dưới khóa scheduler.
+ * Tham số: Không có.
+ * Trả về: 1 nếu rỗng, 0 nếu còn process chờ.
+ */
 int queue_empty(void) {
     pthread_mutex_lock(&queue_lock);
 #ifdef MLQ_SCHED
@@ -36,6 +40,10 @@ int queue_empty(void) {
     pthread_mutex_unlock(&queue_lock);return rc;
 }
 
+/* init_scheduler — Khởi tạo hàng đợi, quota MLQ và mutex scheduler.
+ * Tham số: Không có.
+ * Trả về: Không trả giá trị.
+ */
 void init_scheduler(void) {
 #ifdef MLQ_SCHED
     int i ;
@@ -61,6 +69,10 @@ void init_scheduler(void) {
  *  We implement stateful here using transition technique
  *  State representation   prio = 0 .. MAX_PRIO, curr_slot = 0..(MAX_PRIO - prio)
  */
+/* get_mlq_proc — Chọn process theo quota MLQ và đưa vào running list.
+ * Tham số: Không có.
+ * Trả về: PCB được chọn hoặc NULL nếu không còn process chờ.
+ */
 struct pcb_t * get_mlq_proc(void) {
 	struct pcb_t * proc = NULL;
 
@@ -77,6 +89,10 @@ struct pcb_t * get_mlq_proc(void) {
     return proc;
 }
 
+/* put_mlq_proc — Xóa process khỏi running list; requeue nếu chưa chạy hết code.
+ * Tham số: proc: PCB vừa dùng hết time slice hoặc kết thúc.
+ * Trả về: Không trả giá trị.
+ */
 void put_mlq_proc(struct pcb_t * proc) {
 	
 
@@ -88,6 +104,10 @@ void put_mlq_proc(struct pcb_t * proc) {
 	pthread_mutex_unlock(&queue_lock);
 }
 
+/* add_mlq_proc — Đưa process mới vào hàng đợi theo độ ưu tiên.
+ * Tham số: proc: PCB mới.
+ * Trả về: Không trả giá trị.
+ */
 void add_mlq_proc(struct pcb_t * proc) {
 	
 
@@ -101,18 +121,34 @@ void add_mlq_proc(struct pcb_t * proc) {
 	pthread_mutex_unlock(&queue_lock);	
 }
 
+/* get_proc — Giao diện scheduler lấy process. Cấu hình hiện tại dùng MLQ.
+ * Tham số: Không có.
+ * Trả về: PCB được chọn hoặc NULL.
+ */
 struct pcb_t * get_proc(void) {
 	return get_mlq_proc();
 }
 
+/* put_proc — Giao diện scheduler trả process sau time slice hoặc khi kết thúc (MLQ).
+ * Tham số: proc: PCB.
+ * Trả về: Không trả giá trị.
+ */
 void put_proc(struct pcb_t * proc) {
 	return put_mlq_proc(proc);
 }
 
+/* add_proc — Giao diện scheduler thêm process mới.
+ * Tham số: proc: PCB.
+ * Trả về: Không trả giá trị.
+ */
 void add_proc(struct pcb_t * proc) {
 	return add_mlq_proc(proc);
 }
 #else
+/* get_proc — Giao diện scheduler lấy process. Cấu hình hiện tại dùng MLQ.
+ * Tham số: Không có.
+ * Trả về: PCB được chọn hoặc NULL.
+ */
 struct pcb_t * get_proc(void) {
 	struct pcb_t * proc = NULL;
 
@@ -127,6 +163,10 @@ struct pcb_t * get_proc(void) {
 	return proc;
 }
 
+/* put_proc — Giao diện scheduler trả process sau time slice hoặc khi kết thúc (MLQ).
+ * Tham số: proc: PCB.
+ * Trả về: Không trả giá trị.
+ */
 void put_proc(struct pcb_t * proc) {
 	proc->krnl->ready_queue = &ready_queue;
 	proc->krnl->running_list = &running_list;
@@ -141,6 +181,10 @@ void put_proc(struct pcb_t * proc) {
 	pthread_mutex_unlock(&queue_lock);
 }
 
+/* add_proc — Giao diện scheduler thêm process mới.
+ * Tham số: proc: PCB.
+ * Trả về: Không trả giá trị.
+ */
 void add_proc(struct pcb_t * proc) {
 	proc->krnl->ready_queue = &ready_queue;
 	proc->krnl->running_list = &running_list;

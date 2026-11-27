@@ -5,13 +5,17 @@
 #define MM64_BITS_PER_LONG 64
 
 #define PAGING64_CPU_BUS_WIDTH 57 /* 57-bit canonical virtual address */
-#define PAGING64_PAGESZ  4096      /* 4KB or 12-bits PAGE NUMBER */
+#define PAGING64_PAGESZ  4096      /* 4 KiB = 2^12 byte; offset có 12 bit. */
 
+/* Tạo mặt nạ gồm các bit 1 từ l đến h, dùng kiểu 64 bit. */
 #define GENMASK64(h, l) \
 	(((~0ULL) << (l)) & (~0ULL >> (MM64_BITS_PER_LONG  - (h) - 1)))
 
+/* 57 bit VA trừ 12 bit offset = 45 bit số trang. */
 #define PAGING64_MAX_PGN (UINT64_C(1) << 45)
+/* Đầu nửa trên canonical, tách biệt địa chỉ user. */
 #define KERNEL_BASE_DEFAULT UINT64_C(0xff00000000000000)
+/* 9 bit index => 2^9 entry mỗi bảng; slot 8 byte => 4 KiB/bảng. */
 #define MM64_ENTRIES 512
 #define MM64_PAGE_SHIFT 12
 #define PAGING64_PAGE_ALIGNSZ(sz) (DIV_ROUND_UP(sz,PAGING64_PAGESZ)*PAGING64_PAGESZ)
@@ -42,7 +46,7 @@
 #define PAGING64_ADDR_PGD_HIBIT 56
 #define PAGING64_ADDR_PGD_LOBIT 48
 
-/* Extract PGD Entry */
+/* Tách index: AND với mask rồi dịch phải về bit 0. */
 #define PAGING64_ADDR_OFFST(addr) GETVAL(addr,PAGING64_ADDR_OFFST_MASK,PAGING64_ADDR_OFFST_LOBIT)
 #define PAGING64_ADDR_PT(addr)   ((addr&PAGING64_ADDR_PT_MASK)>>PAGING64_ADDR_PT_LOBIT)
 //GETVAL(addr,PAGING64_ADDR_PT_MASK,PAGING64_ADDR_PT_LOBIT)

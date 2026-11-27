@@ -31,6 +31,8 @@ Ubuntu Virtual Machine image for Intel-x86 and AARCH64 (required HCMUT.SSO syste
 
 See [LICENSE](LICENSE) — educational use only for CO2018.
 
-## MM64 / System Call / USR v2
+## MM64 / System Call / USR v3 — Student Friendly Implementation
 
 Build CPU-only with `make os-mm`; run `make test-mm`. See `README_MM_VI.md`, `FUNCTION_COMPARISON.md`, `TEST_RESULTS.md` and `docs/report_mm.tex` for scope and verification.
+
+V3 preserves the v2 function interfaces and tests, with Vietnamese function-level documentation and explicit control flow. The report in `docs/` is the retained v2 design report; see the new `TEST_RESULTS.md` for v3 verification.

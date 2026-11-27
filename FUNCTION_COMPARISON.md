@@ -1,6 +1,6 @@
-# Đối chiếu hàm và prototype — v2
+# Đối chiếu hàm và prototype — v3
 
-Nguồn chuẩn: `hk261_ossim_demacOprx.zip` (không phải ZIP v1). Phân tích AST bằng Clang, cấu hình MM64/MLQ_SCHED mặc định. So sánh kiểu hàm (`qualType`: kiểu trả về và danh sách kiểu tham số) của tất cả định nghĩa trong 14 file C được sửa, bao gồm nhánh `co_processor` không bị tắt. Các file C/C++ không sửa giữ nguyên từng byte. Tên biến tham số có thể khác, không làm đổi prototype. Các prototype header hiện hữu giữ nguyên; chỉ thêm khai báo của hàm đã có định nghĩa `free_pcb_memph()` và `enlist_vm_freerg_list()` tại nơi cần dùng.
+Nguồn chuẩn: `hk261_ossim_demacOprx.zip` (không phải ZIP v1). Phân tích AST bằng Clang, cấu hình MM64/MLQ_SCHED mặc định. So sánh kiểu hàm (`qualType`: kiểu trả về và danh sách kiểu tham số) của tất cả định nghĩa trong 14 file C được sửa, bao gồm nhánh `co_processor` không bị tắt. Các file C/C++ ngoài 14 file tích hợp giữ nguyên từng byte so với v2. Tên biến tham số có thể khác, không làm đổi prototype. Các prototype header hiện hữu giữ nguyên; chỉ thêm khai báo của hàm đã có định nghĩa `free_pcb_memph()` và `enlist_vm_freerg_list()` tại nơi cần dùng.
 
 | Chỉ tiêu | Kết quả |
 |---|---:|
@@ -9,12 +9,12 @@ Nguồn chuẩn: `hk261_ossim_demacOprx.zip` (không phải ZIP v1). Phân tích
 | Tên hàm/API chưa có trong framework được thêm | 0 |
 | Prototype gốc chưa có thân hàm, nay được hiện thực | 1 (`vm_map_kernel`) |
 | Định nghĩa gốc trong các file C chỉnh sửa | 98 |
-| Định nghĩa v2 trong các file C chỉnh sửa | 99 |
+| Định nghĩa v3 trong các file C chỉnh sửa | 99 |
 | File input/output gốc giữ nguyên byte | 43/43 |
 
 ## Số lượng hàm theo file
 
-| File | Gốc | v2 | Giải thích |
+| File | Gốc | v3 | Giải thích |
 |---|---:|---:|---|
 | `src/cpu.c` | 6 | 6 | Giữ nguyên tên và kiểu hàm |
 | `src/libmem.c` | 25 | 25 | Giữ nguyên tên và kiểu hàm |
@@ -47,7 +47,7 @@ int _syscall(struct krnl_t*, uint32_t, uint32_t, struct sc_regs*);
 
 `run()` kiểm tra trước khi truyền đối số 64 bit vào API 32 bit; `__alloc` từ chối size > INT_MAX trước khi gọi `get_free_vmrg_area`. Các hàm `pg_getval`/`pg_setval` giữ giới hạn `int` của skeleton, đường truy cập region 64 bit sử dụng `__read`, `__write`, `__read_kernel_mem`, `__write_kernel_mem`. Không đổi các kiểu này sang `addr_t` như bản v1.
 
-## Các hàm phụ v1 được loại bỏ
+## Các hàm phụ v1 đã được loại bỏ từ v2 và không xuất hiện lại trong v3
 
 | Nhóm | Thay thế bằng |
 |---|---|
@@ -64,6 +64,15 @@ int _syscall(struct krnl_t*, uint32_t, uint32_t, struct sc_regs*);
 ## Phạm vi kiểm tra
 
 - File `tests/test_mm.c` là chương trình kiểm thử độc lập, có hàm hỗ trợ kiểm thử, không liên kết vào `os-mm`/`os`. Ràng buộc không thêm hàm áp dụng cho mã nguồn chính.
-- `vm_map_kernel` có prototype nguyên bản trong `include/mm.h`; không phải API do v2 tạo ra. Các khai báo gốc chưa có thân hàm ngoài phạm vi MM (ví dụ cache pool) không được hiện thực tùy tiện.
+- `vm_map_kernel` có prototype nguyên bản trong `include/mm.h`; không phải API mới của v3. Các khai báo gốc chưa có thân hàm ngoài phạm vi MM (ví dụ cache pool) không được hiện thực tùy tiện.
 - Audit chạy theo cấu hình môn học MM64/MLQ mặc định, không chứng nhận các chế độ legacy bị vô hiệu hóa. Không chỉnh sửa `mm.c`, `mem.c`, `paging.c` legacy và RTL/C++.
 - Log đối chiếu Clang: `tests/results/function_audit.log`.
+
+## Xác minh riêng v2 → v3
+
+- Clang AST so sánh 14 file: gốc 98 định nghĩa, v2 99, v3 99. Tất cả 99 định nghĩa v2 có cùng tên và `qualType` ở v3. Tất cả 98 định nghĩa gốc còn nguyên kiểu hàm; `vm_map_kernel` khớp prototype gốc.
+- 99/99 định nghĩa active trong 14 file có comment ngay trước hàm gồm tên, `Tham số`, `Trả về` (có thêm 3 comment cho nhánh Scheduler non-MLQ không active).
+- `queue.c`, `sched.c`, `timer.c`: so sánh sau bỏ comment và whitespace cho kết quả giống v2. DMA/RTL/C++ và legacy bên ngoài phạm vi không thay đổi.
+- 29 file input + 14 file output nguyên bản khớp byte. `tests/test_mm.c` cũng khớp byte với v2.
+- Không thêm wrapper, không thêm macro để thay hàm. Các trường thống kê trong `os-mm.h` chỉ được tách từng dòng và ghi chú; kiểu và thứ tự không đổi.
+- Log xác minh mới: `tests/results/function_audit.log`. Audit theo cấu hình mặc định MM64/MLQ; không tuyên bố kiểm chứng mọi cấu hình legacy.

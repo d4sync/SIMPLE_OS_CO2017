@@ -19,7 +19,8 @@ extern "C" {
 #define PAGING_MAX_PGN  (DIV_ROUND_UP(BIT(PAGING_CPU_BUS_WIDTH),PAGING_PAGESZ))
 
 #define PAGING_SBRK_INIT_SZ PAGING_PAGESZ
-/* PTE BIT */
+/* PTE 32 bit: present (31), swapped (30), reserved (29), dirty (28).
+ * Present phải được kiểm tra trước FPN: frame số 0 vẫn hợp lệ. */
 #define PAGING_PTE_PRESENT_MASK BIT(31) 
 #define PAGING_PTE_SWAPPED_MASK BIT(30)
 #define PAGING_PTE_RESERVE_MASK BIT(29)
@@ -31,16 +32,16 @@ extern "C" {
 #define PAGING_PTE_SET_PRESENT(pte) (pte=pte|PAGING_PTE_PRESENT_MASK)
 #define PAGING_PAGE_PRESENT(pte) (pte&PAGING_PTE_PRESENT_MASK)
 
-/* USRNUM */
+/* USRNUM: bit 27..15 dành cho số người dùng định nghĩa, không phải PID/quyền. */
 #define PAGING_PTE_USRNUM_LOBIT 15
 #define PAGING_PTE_USRNUM_HIBIT 27
-/* FPN */
+/* FPN 13 bit: 0..8191, tối đa 32 MiB RAM có thể ánh xạ. */
 #define PAGING_PTE_FPN_LOBIT 0
 #define PAGING_PTE_FPN_HIBIT 12
-/* SWPTYP */
+/* Khi swapped: bit 4..0 là ID thiết bị SWAP. */
 #define PAGING_PTE_SWPTYP_LOBIT 0
 #define PAGING_PTE_SWPTYP_HIBIT 4
-/* SWPOFF */
+/* Khi swapped: bit 25..5 là offset trong SWAP. */
 #define PAGING_PTE_SWPOFF_LOBIT 5
 #define PAGING_PTE_SWPOFF_HIBIT 25
 

@@ -1,8 +1,16 @@
-# Hướng dẫn source v2 — Paging, System Call, USR
+# Hướng dẫn v3 — Student Friendly Implementation
+
+**Paging, System Call và USR | CO2018 HK261**
 
 ## 1. Phạm vi
 
 Dựa trên skeleton demacOprx và PDF Assignment – Simple Operating System, 17/10/2026, mục 1.3, 1.6, 2.2, 2.4, 3.2–3.3. Giữ nguyên mọi prototype gốc, không thêm tên hàm/API mới vào chương trình chính. `vm_map_kernel` đã được khai báo trong `mm.h` gốc, nay được hiện thực. Các thay đổi cấu trúc và macro là cần thiết để quản lý cây, owner, PID registry và thống kê. Không triển khai automatic page replacement khi chưa có yêu cầu giảng viên. DMA chưa thuộc phạm vi phần này. Xem `FUNCTION_COMPARISON.md` và `TEST_RESULTS.md`.
+
+### Cách đọc v3
+
+V3 lấy v2 làm mốc chức năng, không thiết kế API khác. Các hàm chính có comment tiếng Việt gồm chức năng, tham số, giá trị trả về; các hàm dài có comment từng bước. Các con trỏ cấp hai được giữ khi prototype gốc yêu cầu (ví dụ `alloc_pages_range(..., **list)`); việc duyệt/xóa node bên trong hàm dùng `current` và `previous` để dễ theo dõi. Các phép toán bit, mask, mutex recursive, đường rollback và kiểm tra quyền vẫn cần thiết. Không thay đổi thuật toán Scheduler/Timer; các file `queue.c`, `sched.c`, `timer.c` chỉ bổ sung comment so với v2.
+
+Đọc theo thứ tự: `os-mm.h` → `mm-memphy.c` → `mm64.c` → `mm-vm.c` → `libmem.c` → `syscall.c`, `sys_mem.c` → `os.c`, `cpu.c`, `loader.c`. Mỗi hàm có ghi chú ngay trước định nghĩa. Các file legacy và DMA/RTL ngoài phạm vi được giữ nguyên; báo cáo LaTeX/PDF trong `docs/` là bản thiết kế v2 tham khảo, không phải báo cáo kiểm thử v3 mới.
 
 ## 2. Compile/run
 
@@ -79,4 +87,53 @@ Xem `TEST_RESULTS.md`, `tests/test_mm.c`, `tests/results/`. 12 nhóm test pass, 
 
 ## 12. Tích hợp GitHub
 
-Không push hay merge tự động. Tạo backup branch, xem diff và kiểm tra patch trên branch 2412009. Patch gốc→v2 dùng khi branch còn skeleton; patch v1→v2 khi đã áp dụng bản v1. Hai patch là các lựa chọn thay thế, không áp dụng cả hai. Chúng có phần tích hợp Scheduler/Timer cần review; nếu đồng đội sửa những file này, giải quyết conflict thủ công, giữ thuật toán nhóm. Cần test lại trước khi cập nhật PR. Tài liệu và log đi kèm ZIP, không nằm trong patch code.
+Không push hay merge tự động. Patch `2412009-v2-to-v3.patch` chỉ chứa thay đổi `src/` và `include/` so với ZIP v2; không chứa tài liệu hay log. Nếu branch đang dùng v1 hoặc skeleton, cần đưa lên v2 trước, không áp dụng patch v3 trực tiếp. Kiểm tra working tree sạch và backup trước:
+
+```bash
+git switch 2412009
+git pull --ff-only origin 2412009
+git branch backup/2412009-before-v3
+git apply --check /path/to/2412009-v2-to-v3.patch
+git apply /path/to/2412009-v2-to-v3.patch
+git diff --check
+git diff --stat
+make os-mm
+make test-mm
+```
+
+Nếu nhóm đã sửa Scheduler/Timer, có thể bỏ qua ba file chỉ thay comment bằng `git apply --exclude=src/sched.c --exclude=src/queue.c --exclude=src/timer.c ...` (dùng cùng các tùy chọn với `--check` trước). Không tự động ghi đè phần đồng đội. Review `os.c`/`cpu.c` nếu nhóm đã tích hợp DMA. Chỉ commit/push sau khi kiểm tra diff và test trên branch nhóm.
+
+## 13. Ví dụ chạy bằng tay để vấn đáp
+
+### A. Cấp phát 5000 byte vào region 0
+
+1. `run` lấy `alloc 5000 0`; `liballoc` đóng gói `a1=6, a2=0, a3=5000, flags=SC_INTERNAL`.
+2. `_syscall(krnl, pid, 17, &request)` khóa memory_lock và tìm PID; `__sys_memmap` chọn `__alloc`.
+3. `get_free_vmrg_area` tìm First-fit. Với VMA mới trống, không tìm thấy; `__alloc` gửi syscall INC.
+4. `inc_vma_limit` làm tròn 5000 lên 8192 byte, `vm_map_ram` lấy 2 frame và map 2 PTE. Nếu hết frame, rollback trước khi đổi break.
+5. VMA có `[0,8192)`; `get_free_vmrg_area` cấp `[0,5000)`, để lại `[5000,8192)`; zero-fill rồi lưu register 0 = 0. VA bằng 0 vẫn hợp lệ vì descriptor có `rg_end > rg_start`.
+6. `write 165 0 4095` dùng VA 4095: PGN 0, offset 4095. `write ... 4096` dùng PGN 1, offset 0. FPN có thể không liên tục; page table quyết định frame thật.
+
+### B. Đọc code thao tác bit
+
+- `va >> 12`: bỏ 12 bit offset để lấy PGN; `va & 4095`: giữ 12 bit offset. 4095 = 0xFFF.
+- `(va >> 48) & 0x1FF`: lấy PGD index (bit 56..48); các cấp tiếp theo dịch 39, 30, 21, 12.
+- `PAGING_PAGE_PRESENT(pte)`: kiểm tra bit 31. `PAGING_FPN(pte)`: lấy 13 bit thấp; FPN 0 không có nghĩa page absent.
+- `pte | PAGING_PTE_DIRTY_MASK`: đặt dirty bit mà không làm mất FPN. `pte_set_entry(...,0,...)`: bỏ mapping và thu hồi bảng rỗng.
+- Ví dụ nếu FPN = 3, offset = 1, PA = 3 × 4096 + 1 = 12289.
+
+### C. KMALLOC và COPY
+
+Với `kmalloc 5000 1`, kernel tìm 2 frame vật lý liên tiếp. Nếu RAM trống ở FPN 0,2,4 thì dù đủ tổng 3 frame, không có dãy 2 frame liên tiếp nên KMALLOC thất bại; ALLOC user vẫn có thể thành công. `copy_from_user 0 1 4095 2` kiểm tra source user, destination kernel, cả hai vùng chứa đủ offset 4095..4096 rồi sao chép hai byte. `copy_to_user` làm chiều ngược lại. Không dùng READ/WRITE user trực tiếp trên region kernel.
+
+### D. Vì sao giữ `goto done` và mutex recursive?
+
+Mỗi `__alloc`, `__free`, `__read`, `__write`, `__kmalloc` khóa một lần, sau đó có nhiều nhánh lỗi. Nhãn `done` tập trung việc unlock và trả mã lỗi; nếu return sớm mà quên unlock, CPU khác có thể bị kẹt. Recursive mutex cho phép cùng thread vào `_syscall` rồi gọi INC hoặc IO lồng trong handler. Không bỏ cơ chế đồng bộ chỉ để code ngắn hơn.
+
+### E. Phân biệt 3 dạng địa chỉ
+
+- Register ID (0..9) là chỉ số symbol, không phải VA.
+- VA là `rg_start + offset`, có thể lớn hơn 32 bit. Chỉ các wrapper cũ có đối số `uint32_t`; CPU kiểm tra trước khi cast.
+- PA là `FPN * PAGING64_PAGESZ + page_offset`, dùng với `MEMPHY_read/write`.
+
+Kết quả thử thực tế và phạm vi chưa xác minh xem `TEST_RESULTS.md`.

@@ -114,9 +114,9 @@ struct pcb_t
 	// and this vale overwrites the default priority when it existed
 	uint32_t prio;
 #endif
-	struct mm_struct *mm;
-	struct krnl_t *krnl;
-	struct pcb_t *registry_next;	
+	struct mm_struct *mm;   /* Memory manager user riêng của process. */
+	struct krnl_t *krnl;    /* Kernel dùng chung. */
+	struct pcb_t *registry_next; /* Node kế trong registry PID. */
 	struct page_table_t *page_table; // Page table
 	uint32_t bp;			 // Break pointer
 };
@@ -124,15 +124,15 @@ struct pcb_t
 /* Kernel structure */
 struct krnl_t
 {
-	struct pcb_t *processes; /* Registry kernel, bao ve boi memory_lock */
-	addr_t kernel_base;
+	struct pcb_t *processes; /* Registry PID, được bảo vệ bằng memory_lock. */
+	addr_t kernel_base; /* Địa chỉ ảo đầu kernel space. */
 	struct queue_t *ready_queue;
 	struct queue_t *running_list;
 #ifdef MLQ_SCHED
 	struct queue_t *mlq_ready_queue;
 #endif
 #ifdef MM_PAGING
-	struct mm_struct *mm;
+	struct mm_struct *mm; /* Memory manager kernel dùng chung. */
 	// struct vm_rg_struct symrgtbl[PAGING_MAX_SYMTBL_SZ];
 	struct memphy_struct *mram;
 	struct memphy_struct **mswp;

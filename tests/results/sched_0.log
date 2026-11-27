@@ -1,19 +1,19 @@
 [MM-CONFIG] RAM=1048576 page=4096 usable_frames=256 kernel_base=ff00000000000000
 Time slot   0
 	Loaded a process at input/proc/s0, PID: 1 PRIO: 4
+	Loaded a process at input/proc/s0, PID: 2 PRIO: 4
 Time slot   1
 	CPU 0: Dispatched process  1
-	Loaded a process at input/proc/s0, PID: 2 PRIO: 4
 Time slot   2
 Time slot   3
 	CPU 0: Put process  1 to run queue
 	CPU 0: Dispatched process  2
-Time slot   4
 	Loaded a process at input/proc/s1, PID: 3 PRIO: 0
+Time slot   4
 Time slot   5
-	Loaded a process at input/proc/s0, PID: 4 PRIO: 0
 	CPU 0: Put process  2 to run queue
 	CPU 0: Dispatched process  3
+	Loaded a process at input/proc/s0, PID: 4 PRIO: 0
 Time slot   6
 Time slot   7
 	CPU 0: Put process  3 to run queue

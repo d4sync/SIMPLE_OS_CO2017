@@ -11,9 +11,11 @@
 #ifndef SYSCALL_H
 #define SYSCALL_H
 #include "common.h"
-#define SC_INTERNAL 1 /* Chi wrapper MM noi bo duoc dat co nay. */
+#define SC_INTERNAL 1 /* Chỉ wrapper MM nội bộ đặt cờ này; instruction syscall không được đặt. */
 
 
+/* Đối số và kết quả syscall; không truyền PCB qua ranh giới user/kernel.
+ * Với syscall 17: a1 là operation, a2..a5 là đối số, a3/a6 có thể trả kết quả. */
 struct sc_regs {
         arg_t a1;
         arg_t a2;

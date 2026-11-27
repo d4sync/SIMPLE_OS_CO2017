@@ -9,7 +9,6 @@
  * System Library
  * Memory Module Library libmem.c
  */
-
 #include "mm64.h"
 #include "syscall.h"
 #include "libmem.h"
@@ -18,309 +17,808 @@
 #include <inttypes.h>
 #include <errno.h>
 #include <limits.h>
-
 #define REG_COUNT 10
 
-struct vm_rg_struct *get_symrg_byid(struct mm_struct *mm,int id)
+/* get_symrg_byid — Tìm descriptor vùng nhớ theo register ID 0..9.
+ * Tham số: mm: memory manager user; id: số register.
+ * Trả về: Con trỏ symbol region hoặc NULL nếu ID không hợp lệ.
+ */
+struct vm_rg_struct *get_symrg_byid(struct mm_struct *mm, int id)
 {
-    return mm && id>=0 && id<REG_COUNT ? &mm->symrgtbl[id]:NULL;
+    if (mm == NULL || id < 0 || id >= REG_COUNT) {
+        return NULL;
+    }
+    return &mm->symrgtbl[id];
 }
-int enlist_vm_freerg_list(struct mm_struct *mm,struct vm_rg_struct *r)
+/* enlist_vm_freerg_list — Chèn region vào free list đã sắp xếp và gộp vùng kề nhau.
+ * Tham số: mm: memory manager; region: node được chuyển quyền sở hữu vào danh sách.
+ * Trả về: 0 nếu thành công, -1 nếu region/VMA lỗi.
+ */
+int enlist_vm_freerg_list(struct mm_struct *mm, struct vm_rg_struct *region)
 {
-    struct vm_area_struct *v=r?get_vma_by_num(mm,r->vmaid):NULL;
-    if(!v||!r||r->rg_start>=r->rg_end)return -1;
-    struct vm_rg_struct **p=&v->vm_freerg_list;
-    while(*p && (*p)->rg_start<r->rg_start)p=&(*p)->rg_next;
-    r->rg_next=*p;*p=r;
-    struct vm_rg_struct *a=v->vm_freerg_list;
-    while(a && a->rg_next){struct vm_rg_struct *b=a->rg_next;
-        if(a->rg_end>=b->rg_start){if(b->rg_end>a->rg_end)a->rg_end=b->rg_end;a->rg_next=b->rg_next;free(b);}
-        else a=b;
+    if (region == NULL || region->rg_start >= region->rg_end) {
+        return -1;
+    }
+    struct vm_area_struct *vma = get_vma_by_num(mm, region->vmaid);
+    if (vma == NULL) {
+        return -1;
+    }
+    // Bước 1: Tìm vị trí chèn region theo địa chỉ tăng dần.
+    struct vm_rg_struct *previous = NULL;
+    struct vm_rg_struct *current = vma->vm_freerg_list;
+    while (current != NULL && current->rg_start < region->rg_start) {
+        previous = current;
+        current = current->rg_next;
+    }
+    region->rg_next = current;
+    if (previous == NULL) {
+        vma->vm_freerg_list = region;
+    } else {
+        previous->rg_next = region;
+    }
+    // Bước 2: Gộp các vùng liền kề hoặc chồng lấn (coalescing).
+    current = vma->vm_freerg_list;
+    while (current != NULL && current->rg_next != NULL) {
+        struct vm_rg_struct *next_region = current->rg_next;
+        if (current->rg_end >= next_region->rg_start) {
+            if (next_region->rg_end > current->rg_end) {
+                current->rg_end = next_region->rg_end;
+            }
+            current->rg_next = next_region->rg_next;
+            free(next_region);
+        } else {
+            current = next_region;
+        }
     }
     return 0;
 }
 
-int get_free_vmrg_area(struct pcb_t *p,int id,int size,struct vm_rg_struct *r)
+/* get_free_vmrg_area — First-fit: lấy một khoảng từ free list và thu nhỏ hoặc xóa node cũ.
+ * Tham số: caller: PCB; id: VMA; size: số byte; region: descriptor đầu ra.
+ * Trả về: 0 nếu tìm thấy, -1 nếu không đủ vùng trống/lỗi.
+ */
+int get_free_vmrg_area(struct pcb_t *caller, int id, int size, struct vm_rg_struct *region)
 {
-    struct vm_area_struct *v=get_vma_by_num(p->mm,id);
-    if(!v||size<=0||!r)return -1;
-    struct vm_rg_struct **q=&v->vm_freerg_list;
-    for(;*q;q=&(*q)->rg_next){struct vm_rg_struct *f=*q;
-        if((addr_t)size>f->rg_end-f->rg_start)continue;
-        *r=(struct vm_rg_struct){.vmaid=id,.mode_bit=1,.rg_start=f->rg_start,.rg_end=f->rg_start+size};
-        f->rg_start+=size;
-        if(f->rg_start==f->rg_end){*q=f->rg_next;free(f);}
-        return 0;
+    struct vm_area_struct *vma = get_vma_by_num(caller->mm, id);
+    if (vma == NULL || size <= 0 || region == NULL) {
+        return -1;
+    }
+    // Bước 1: First-fit: tìm vùng trống đầu tiên đủ số byte yêu cầu.
+    struct vm_rg_struct *previous = NULL;
+    struct vm_rg_struct *current = vma->vm_freerg_list;
+    while (current != NULL) {
+        addr_t available_size = current->rg_end - current->rg_start;
+        if ((addr_t)size <= available_size) {
+            // Bước 2: Tách phần đầu của vùng trống để cấp phát.
+            *region = (struct vm_rg_struct){0};
+            region->vmaid = id;
+            region->mode_bit = 1;
+            region->rg_start = current->rg_start;
+            region->rg_end = current->rg_start + size;
+            current->rg_start += size;
+            // Nếu đã lấy hết region, bỏ node khỏi free list.
+            if (current->rg_start == current->rg_end) {
+                if (previous == NULL) {
+                    vma->vm_freerg_list = current->rg_next;
+                } else {
+                    previous->rg_next = current->rg_next;
+                }
+                free(current);
+            }
+            return 0;
+        }
+        previous = current;
+        current = current->rg_next;
     }
     return -1;
 }
+/* Wrapper user chỉ gửi PID và các đối số trong thanh ghi qua syscall. */
 
-/* Libmem la wrapper; tham so qua syscall chi la PID va thanh ghi. */
-
-int __alloc(struct pcb_t *p,int id,int reg,addr_t size,addr_t *out)
+/* __alloc — Cấp phát vùng user, mở rộng VMA nếu cần, zero-fill và lưu VA vào register.
+ * Tham số: caller: PCB đã lookup; id: VMA; reg: register; size: số byte; out: nơi nhận VA.
+ * Trả về: 0 nếu thành công, -1 nếu lỗi. Tự khóa memory_lock, hỗ trợ gọi lồng.
+ */
+int __alloc(struct pcb_t *caller, int id, int reg, addr_t size, addr_t *out)
 {
-    int rc=-1;pthread_mutex_lock(&memory_lock);
-    struct vm_rg_struct *s=get_symrg_byid(p->mm,reg),r;
-    struct vm_area_struct *v=get_vma_by_num(p->mm,id);
-    if(!s||(s && s->rg_end>s->rg_start)||!v||!out||!size||size>INT_MAX)goto done;
-    if(get_free_vmrg_area(p,id,(int)size,&r)){
-        /* Neu tail da co mot phan free, chi xin them phan thieu. */
-        addr_t missing=size;
-        for(struct vm_rg_struct *f=v->vm_freerg_list;f;f=f->rg_next)
-            if(f->rg_end==v->vm_end && f->rg_end-f->rg_start<size)missing-=f->rg_end-f->rg_start;
-        struct sc_regs req={.a1=SYSMEM_INC_OP,.a2=id,.a3=missing,.flags=SC_INTERNAL};
-        if(_syscall(p->krnl,p->pid,17,&req)||get_free_vmrg_area(p,id,(int)size,&r))goto done;
+    int result = -1;
+    pthread_mutex_lock(&memory_lock);
+    // Bước 1: Kiểm tra register, VMA và kích thước.
+    struct vm_rg_struct *symbol_region = get_symrg_byid(caller->mm, reg);
+    struct vm_rg_struct allocated_region;
+    struct vm_area_struct *vma = get_vma_by_num(caller->mm, id);
+    if (symbol_region == NULL || vma == NULL || out == NULL || size == 0 || size > INT_MAX) {
+        goto done;
     }
-    /* Xoa data cu khi tai su dung free region, tranh ro ri noi dung. */
-    for(addr_t a=r.rg_start;a<r.rg_end;){addr_t pa;
-        addr_t e=pte_get_entry(p->mm,a>>12,p);
-        if(!PAGING_PAGE_PRESENT(e)||(e&PAGING_PTE_SWAPPED_MASK))goto done;
-        pa=PAGING_FPN(e)*4096+(a&4095);++p->mm->walks;p->mm->pt_accesses+=5;
-        addr_t n=4096-(a&4095);if(n>r.rg_end-a)n=r.rg_end-a;
-        memset(p->krnl->mram->storage+pa,0,n);a+=n;p->mm->data_accesses+=n;
+    if (symbol_region->rg_end > symbol_region->rg_start) {
+        goto done;
     }
-    *s=r;*out=r.rg_start;p->regs[reg]=r.rg_start;rc=0;
+    if (get_free_vmrg_area(caller, id, (int)size, &allocated_region)) {
+        // Bước 2: Nếu First-fit thất bại, chỉ mở rộng VMA phần còn thiếu.
+        addr_t missing = size;
+        for (struct vm_rg_struct *free_region = vma->vm_freerg_list; free_region; free_region = free_region->rg_next) {
+            if (free_region->rg_end == vma->vm_end && free_region->rg_end - free_region->rg_start < size) {
+                missing -= free_region->rg_end - free_region->rg_start;
+            }
+        }
+        struct sc_regs request = {0};
+        request.a1 = SYSMEM_INC_OP;
+        request.a2 = id;
+        request.a3 = missing;
+        request.flags = SC_INTERNAL;
+        if (_syscall(caller->krnl, caller->pid, 17, &request) || get_free_vmrg_area(caller, id, (int)size, &allocated_region)) {
+            goto done;
+        }
+    }
+    // Bước 3: Zero-fill theo từng đoạn trong page để không lộ dữ liệu cũ.
+    for (addr_t virtual_address = allocated_region.rg_start; virtual_address < allocated_region.rg_end;) {
+        addr_t physical_address;
+        addr_t pte = pte_get_entry(caller->mm, virtual_address >> 12, caller);
+        if (!PAGING_PAGE_PRESENT(pte) || (pte&PAGING_PTE_SWAPPED_MASK)) {
+            goto done;
+        }
+        addr_t frame_number = PAGING_FPN(pte);
+        addr_t page_offset = virtual_address & 4095;
+        physical_address = frame_number * PAGING64_PAGESZ + page_offset;
+        ++caller->mm->walks;
+        caller->mm->pt_accesses += 5;
+        addr_t chunk_size = PAGING64_PAGESZ - page_offset;
+        if (chunk_size > allocated_region.rg_end - virtual_address) {
+            chunk_size = allocated_region.rg_end - virtual_address;
+        }
+        memset(caller->krnl->mram->storage + physical_address, 0, chunk_size);
+        virtual_address += chunk_size;
+        caller->mm->data_accesses += chunk_size;
+    }
+    // Bước 4: Lưu descriptor và VA vào register sau khi thành công.
+    *symbol_region = allocated_region;
+    *out = allocated_region.rg_start;
+    caller->regs[reg] = allocated_region.rg_start;
+    result = 0;
 #ifdef IODUMP
-    printf("[REGION] PID=%u reg=%d mode=user range=[%016"PRIx64",%016"PRIx64") sbrk=%016"PRIx64"\n",p->pid,reg,r.rg_start,r.rg_end,v->sbrk);
-    print_list_rg(v->vm_freerg_list);
+    printf("[REGION] PID=%u reg=%d mode=user range=[%016" PRIx64 ",%016" PRIx64 ") sbrk=%016" PRIx64 "\n", caller->pid, reg, allocated_region.rg_start, allocated_region.rg_end, vma->sbrk);
+    print_list_rg(vma->vm_freerg_list);
 #endif
 
-done:pthread_mutex_unlock(&memory_lock);return rc;
+done:
+    pthread_mutex_unlock(&memory_lock);
+    return result;
 }
-
-/* FREE user tra region ve free list; frame giu lai de tai su dung.
- * FREE kernel bo mapping va tra ca day frame ngay. */
-int __free(struct pcb_t *p,int id,int reg)
+/* FREE user trả region về free list; frame giữ lại để tái sử dụng.
+ * FREE kernel bỏ mapping và trả frame ngay. */
+/* __free — Giải phóng symbol: user trả free region, kernel trả frame và xóa PTE.
+ * Tham số: caller: PCB; id: VMA; reg: register của region.
+ * Trả về: 0 nếu thành công, -1 nếu lỗi hoặc double-free.
+ */
+int __free(struct pcb_t *caller, int id, int reg)
 {
-    int rc=-1;pthread_mutex_lock(&memory_lock);struct vm_rg_struct *s=get_symrg_byid(p->mm,reg);
-    if(!(s && s->rg_end>s->rg_start)||s->vmaid!=id)goto done;
-    if(s->mode_bit){struct vm_rg_struct *r=malloc(sizeof(*r));if(!r)goto done;*r=*s;r->rg_next=NULL;
-        if(enlist_vm_freerg_list(p->mm,r)){free(r);goto done;}
-    }else{
-        addr_t n=(s->rg_end-s->rg_start+4095)/4096;
-        for(addr_t i=0;i<n;++i){addr_t pg=(s->rg_start>>12)+i,e=pte_get_entry(p->krnl->mm,pg,p);
-            if(PAGING_PAGE_PRESENT(e))MEMPHY_put_freefp(p->krnl->mram,PAGING_FPN(e));
-            pte_set_entry(p->krnl->mm,pg,0,p);}
+    int result = -1;
+    pthread_mutex_lock(&memory_lock);
+    struct vm_rg_struct *symbol_region = get_symrg_byid(caller->mm, reg);
+    if (!(symbol_region && symbol_region->rg_end > symbol_region->rg_start) || symbol_region->vmaid != id) {
+        goto done;
     }
-    #ifdef IODUMP
-    printf("[FREE] PID=%u reg=%d mode=%lu range=[%016"PRIx64",%016"PRIx64")\n",p->pid,reg,s->mode_bit,s->rg_start,s->rg_end);
-#endif
-    memset(s,0,sizeof(*s));p->regs[reg]=0;rc=0;
+    if (symbol_region->mode_bit) {
+        struct vm_rg_struct *region = malloc(sizeof(*region));
+        if (!region) {
+            goto done;
+        }
+        *region = *symbol_region;
+        region->rg_next = NULL;
+        if (enlist_vm_freerg_list(caller->mm, region)) {
+            free(region);
+            goto done;
+        }
+    } else {
+        addr_t page_count = (symbol_region->rg_end - symbol_region->rg_start + 4095) / 4096;
+        for (addr_t i = 0; i < page_count; ++i) {
+            addr_t page_number = (symbol_region->rg_start >> 12) + i, pte = pte_get_entry(caller->krnl->mm, page_number, caller);
+            if (PAGING_PAGE_PRESENT(pte)) {
+                MEMPHY_put_freefp(caller->krnl->mram, PAGING_FPN(pte));
+            }
+            pte_set_entry(caller->krnl->mm, page_number, 0, caller);
+        }
+    }
 #ifdef IODUMP
-    print_list_rg(p->mm->mmap->vm_freerg_list);
+    printf("[FREE] PID=%u reg=%d mode=%lu range=[%016" PRIx64 ",%016" PRIx64 ")\n", caller->pid, reg, symbol_region->mode_bit, symbol_region->rg_start, symbol_region->rg_end);
+#endif
+    memset(symbol_region, 0, sizeof(*symbol_region));
+    caller->regs[reg] = 0;
+    result = 0;
+#ifdef IODUMP
+    print_list_rg(caller->mm->mmap->vm_freerg_list);
 #endif
 
-done:pthread_mutex_unlock(&memory_lock);return rc;
+done:
+    pthread_mutex_unlock(&memory_lock);
+    return result;
 }
-
-/* Moi byte: walk 5 cap, kiem tra mode/owner, sau do truy cap RAM.
- * User IO phai qua syscall; kernel IO khong lo dia chi vat ly ra user. */
-
-/* Prototype int cua skeleton: chi nhan dia chi khong am. */
+/* Mỗi lần đọc/ghi: dịch địa chỉ, kiểm tra quyền, sau đó truy cập RAM. */
+/* Prototype int gốc chỉ nhận địa chỉ không âm trong giới hạn int. */
+/* pg_getpage — Lấy FPN từ PTE present của trang, theo prototype int gốc.
+ * Tham số: mm: bảng trang; pgn: số trang không âm; fpn: đầu ra; caller: PCB.
+ * Trả về: 0 nếu thành công, -1 nếu trang lỗi/chưa resident.
+ */
 int pg_getpage(struct mm_struct *mm, int pgn, int *fpn, struct pcb_t *caller)
 {
-    if(pgn<0||!fpn)return -1;
-    addr_t e=pte_get_entry(mm,(addr_t)pgn,caller);
-    if(!PAGING_PAGE_PRESENT(e)||(e&PAGING_PTE_SWAPPED_MASK))return -1;
-    *fpn=(int)PAGING_FPN(e);return 0;
+    if (pgn < 0 || !fpn) {
+        return -1;
+    }
+    addr_t pte = pte_get_entry(mm, (addr_t)pgn, caller);
+    if (!PAGING_PAGE_PRESENT(pte) || (pte&PAGING_PTE_SWAPPED_MASK)) {
+        return -1;
+    }
+    *fpn = (int)PAGING_FPN(pte);
+    return 0;
 }
+/* pg_getval — Đọc byte tại VA kiểu int, kiểm tra owner và cập nhật thống kê.
+ * Tham số: mm: bảng trang; addr: VA không âm; data: đầu ra; caller: PCB.
+ * Trả về: 0 nếu thành công, -1 nếu lỗi. Caller giữ khóa nếu chạy đồng thời.
+ */
 int pg_getval(struct mm_struct *mm, int addr, BYTE *data, struct pcb_t *caller)
 {
-    int fpn; if(addr<0||!data||pg_getpage(mm,addr>>12,&fpn,caller))return -1;
-    struct framephy_struct *f=caller->krnl->mram->used_fp_list;
-    while(f&&f->fpn!=(addr_t)fpn)f=f->fp_next;
-    if(!f||f->owner!=mm)return -1;
-    ++mm->walks;mm->pt_accesses+=5;
-    int rc=MEMPHY_read(caller->krnl->mram,(addr_t)fpn*4096+(addr&4095),data);if(!rc)++mm->data_accesses;return rc;
+    int fpn;
+    if (addr < 0 || !data || pg_getpage(mm, addr >> 12, &fpn, caller)) {
+        return -1;
+    }
+    struct framephy_struct *current_frame = caller->krnl->mram->used_fp_list;
+    while (current_frame && current_frame->fpn != (addr_t)fpn) {
+        current_frame = current_frame->fp_next;
+    }
+    if (!current_frame || current_frame->owner != mm) {
+        return -1;
+    }
+    ++mm->walks;
+    mm->pt_accesses += 5;
+    int result = MEMPHY_read(caller->krnl->mram, (addr_t)fpn*4096 + (addr&4095), data);
+    if (!result) {
+        ++mm->data_accesses;
+    }
+    return result;
 }
+/* pg_setval — Ghi byte tại VA kiểu int, kiểm tra owner và đặt dirty bit.
+ * Tham số: mm: bảng trang; addr: VA không âm; value: byte; caller: PCB.
+ * Trả về: 0 nếu thành công, -1 nếu lỗi. Caller giữ khóa nếu chạy đồng thời.
+ */
 int pg_setval(struct mm_struct *mm, int addr, BYTE value, struct pcb_t *caller)
 {
-    int fpn; if(addr<0||pg_getpage(mm,addr>>12,&fpn,caller))return -1;
-    struct framephy_struct *f=caller->krnl->mram->used_fp_list;
-    while(f&&f->fpn!=(addr_t)fpn)f=f->fp_next;
-    if(!f||f->owner!=mm)return -1;
-    ++mm->walks;mm->pt_accesses+=5;
-    int rc=MEMPHY_write(caller->krnl->mram,(addr_t)fpn*4096+(addr&4095),value);
-    if(!rc){++mm->data_accesses;addr_t e=pte_get_entry(mm,(addr_t)addr>>12,caller);pte_set_entry(mm,(addr_t)addr>>12,e|PAGING_PTE_DIRTY_MASK,caller);}return rc;
+    int fpn;
+    if (addr < 0 || pg_getpage(mm, addr >> 12, &fpn, caller)) {
+        return -1;
+    }
+    struct framephy_struct *current_frame = caller->krnl->mram->used_fp_list;
+    while (current_frame && current_frame->fpn != (addr_t)fpn) {
+        current_frame = current_frame->fp_next;
+    }
+    if (!current_frame || current_frame->owner != mm) {
+        return -1;
+    }
+    ++mm->walks;
+    mm->pt_accesses += 5;
+    int result = MEMPHY_write(caller->krnl->mram, (addr_t)fpn*4096 + (addr&4095), value);
+    if (!result) {
+        ++mm->data_accesses;
+        addr_t pte = pte_get_entry(mm, (addr_t)addr >> 12, caller);
+        pte_set_entry(mm, (addr_t)addr >> 12, pte | PAGING_PTE_DIRTY_MASK, caller);
+    }
+    return result;
 }
-int __read(struct pcb_t *p,int id,int reg,addr_t off,BYTE *b)
+/* __read — Đọc một byte từ region user bằng VA 64 bit rồi gửi syscall IO.
+ * Tham số: caller: PCB; id: VMA; reg: region; offset: độ lệch byte; data: đầu ra.
+ * Trả về: 0 nếu thành công, mã lỗi âm nếu sai quyền/phạm vi/mapping.
+ */
+int __read(struct pcb_t *caller, int id, int reg, addr_t offset, BYTE *data)
 {
-    pthread_mutex_lock(&memory_lock);int rc=-1;
-    struct vm_rg_struct *r=get_symrg_byid(p->mm,reg);
-    if(!r||r->rg_end<=r->rg_start||r->vmaid!=id||r->mode_bit!=1||off>=r->rg_end-r->rg_start||!b)goto done;
-    struct mm_struct *mm=p->mm;
-    addr_t va=r->rg_start+off,e=pte_get_entry(mm,va>>12,p);
-    if(!PAGING_PAGE_PRESENT(e)||(e&PAGING_PTE_SWAPPED_MASK))goto done;
-    struct framephy_struct *fp=p->krnl->mram->used_fp_list;
-    while(fp&&fp->fpn!=PAGING_FPN(e))fp=fp->fp_next;
-    if(!fp||fp->owner!=mm)goto done;
-    addr_t pa=PAGING_FPN(e)*4096+(va&4095);
-    ++mm->walks;mm->pt_accesses+=5;
-    struct sc_regs req={.a1=SYSMEM_IO_READ,.a2=pa,.a3=0,.flags=SC_INTERNAL};
-    rc=_syscall(p->krnl,p->pid,17,&req);if(!rc)*b=(BYTE)req.a3;
-    if(!rc){++mm->data_accesses;}
-done:pthread_mutex_unlock(&memory_lock);return rc;
+    pthread_mutex_lock(&memory_lock);
+    int result = -1;
+    // Bước 1: Kiểm tra region, mode và offset trước khi dịch địa chỉ.
+    struct vm_rg_struct *region = get_symrg_byid(caller->mm, reg);
+    if (region == NULL || region->rg_end <= region->rg_start || region->vmaid != id || region->mode_bit != 1) {
+        goto done;
+    }
+    addr_t region_size = region->rg_end - region->rg_start;
+    if (offset >= region_size || data == NULL) {
+        goto done;
+    }
+    // Bước 2: Chọn bảng trang user riêng của process, lấy PTE.
+    struct mm_struct *mm = caller->mm;
+    addr_t virtual_address = region->rg_start + offset;
+    addr_t page_number = virtual_address >> 12;
+    addr_t pte = pte_get_entry(mm, page_number, caller);
+    if (!PAGING_PAGE_PRESENT(pte) || (pte & PAGING_PTE_SWAPPED_MASK)) {
+        goto done;
+    }
+    // Bước 3: Kiểm tra frame thật sự thuộc memory manager này.
+    addr_t frame_number = PAGING_FPN(pte);
+    struct framephy_struct *current_frame = caller->krnl->mram->used_fp_list;
+    while (current_frame != NULL && current_frame->fpn != frame_number) {
+        current_frame = current_frame->fp_next;
+    }
+    if (current_frame == NULL || current_frame->owner != mm) {
+        goto done;
+    }
+    // Bước 4: PA = FPN * page size + offset 12 bit thấp.
+    addr_t page_offset = virtual_address & 4095;
+    addr_t physical_address = frame_number * PAGING64_PAGESZ + page_offset;
+    ++mm->walks;
+    mm->pt_accesses += 5;
+    // Bước 5: Gửi syscall IO nội bộ theo PID và cập nhật thống kê.
+    struct sc_regs request = {0};
+    request.a1 = SYSMEM_IO_READ;
+    request.a2 = physical_address;
+    request.flags = SC_INTERNAL;
+    result = _syscall(caller->krnl, caller->pid, 17, &request);
+    if (result == 0) {
+        *data = (BYTE)request.a3;
+    }
+    if (result == 0) {
+        ++mm->data_accesses;
+    }
+done:
+    // Mọi đường thoát sau khi lock đều đi qua đây.
+    pthread_mutex_unlock(&memory_lock);
+    return result;
 }
 
-int __write(struct pcb_t *p,int id,int reg,addr_t off,BYTE b)
+/* __write — Ghi một byte vào region user qua syscall IO và đặt dirty bit.
+ * Tham số: caller: PCB; id: VMA; reg: region; offset: độ lệch; data: byte.
+ * Trả về: 0 nếu thành công, mã lỗi âm nếu lỗi.
+ */
+int __write(struct pcb_t *caller, int id, int reg, addr_t offset, BYTE data)
 {
-    pthread_mutex_lock(&memory_lock);int rc=-1;
-    struct vm_rg_struct *r=get_symrg_byid(p->mm,reg);
-    if(!r||r->rg_end<=r->rg_start||r->vmaid!=id||r->mode_bit!=1||off>=r->rg_end-r->rg_start)goto done;
-    struct mm_struct *mm=p->mm;
-    addr_t va=r->rg_start+off,e=pte_get_entry(mm,va>>12,p);
-    if(!PAGING_PAGE_PRESENT(e)||(e&PAGING_PTE_SWAPPED_MASK))goto done;
-    struct framephy_struct *fp=p->krnl->mram->used_fp_list;
-    while(fp&&fp->fpn!=PAGING_FPN(e))fp=fp->fp_next;
-    if(!fp||fp->owner!=mm)goto done;
-    addr_t pa=PAGING_FPN(e)*4096+(va&4095);
-    ++mm->walks;mm->pt_accesses+=5;
-    struct sc_regs req={.a1=SYSMEM_IO_WRITE,.a2=pa,.a3=(unsigned char)b,.flags=SC_INTERNAL};
-    rc=_syscall(p->krnl,p->pid,17,&req);
-    if(!rc){++mm->data_accesses;pte_set_entry(mm,va>>12,e|PAGING_PTE_DIRTY_MASK,p);}
-done:pthread_mutex_unlock(&memory_lock);return rc;
+    pthread_mutex_lock(&memory_lock);
+    int result = -1;
+    // Bước 1: Kiểm tra region, mode và offset trước khi dịch địa chỉ.
+    struct vm_rg_struct *region = get_symrg_byid(caller->mm, reg);
+    if (region == NULL || region->rg_end <= region->rg_start || region->vmaid != id || region->mode_bit != 1) {
+        goto done;
+    }
+    addr_t region_size = region->rg_end - region->rg_start;
+    if (offset >= region_size) {
+        goto done;
+    }
+    // Bước 2: Chọn bảng trang user riêng của process, lấy PTE.
+    struct mm_struct *mm = caller->mm;
+    addr_t virtual_address = region->rg_start + offset;
+    addr_t page_number = virtual_address >> 12;
+    addr_t pte = pte_get_entry(mm, page_number, caller);
+    if (!PAGING_PAGE_PRESENT(pte) || (pte & PAGING_PTE_SWAPPED_MASK)) {
+        goto done;
+    }
+    // Bước 3: Kiểm tra frame thật sự thuộc memory manager này.
+    addr_t frame_number = PAGING_FPN(pte);
+    struct framephy_struct *current_frame = caller->krnl->mram->used_fp_list;
+    while (current_frame != NULL && current_frame->fpn != frame_number) {
+        current_frame = current_frame->fp_next;
+    }
+    if (current_frame == NULL || current_frame->owner != mm) {
+        goto done;
+    }
+    // Bước 4: PA = FPN * page size + offset 12 bit thấp.
+    addr_t page_offset = virtual_address & 4095;
+    addr_t physical_address = frame_number * PAGING64_PAGESZ + page_offset;
+    ++mm->walks;
+    mm->pt_accesses += 5;
+    // Bước 5: Gửi syscall IO nội bộ theo PID và cập nhật thống kê.
+    struct sc_regs request = {0};
+    request.a1 = SYSMEM_IO_WRITE;
+    request.a2 = physical_address;
+    request.flags = SC_INTERNAL;
+    request.a3 = (unsigned char)data;
+    result = _syscall(caller->krnl, caller->pid, 17, &request);
+    if (result == 0) {
+        ++mm->data_accesses;
+        pte_set_entry(mm, page_number, pte | PAGING_PTE_DIRTY_MASK, caller);
+    }
+done:
+    // Mọi đường thoát sau khi lock đều đi qua đây.
+    pthread_mutex_unlock(&memory_lock);
+    return result;
 }
 
-int __read_user_mem(struct pcb_t *p,int id,int reg,addr_t off,BYTE *b){return __read(p,id,reg,off,b);}
-int __write_user_mem(struct pcb_t *p,int id,int reg,addr_t off,BYTE b){return __write(p,id,reg,off,b);}
-int __read_kernel_mem(struct pcb_t *p,int id,int reg,addr_t off,BYTE *b)
+/* __read_user_mem — Gọi đường đọc user có kiểm tra quyền, dùng trong COPY.
+ * Tham số: caller: PCB; id: VMA; reg: region; offset: độ lệch; data: đầu ra.
+ * Trả về: Kết quả của __read (0 hoặc mã lỗi âm).
+ */
+int __read_user_mem(struct pcb_t *caller, int id, int reg, addr_t offset, BYTE *data)
 {
-    pthread_mutex_lock(&memory_lock);int rc=-1;
-    struct vm_rg_struct *r=get_symrg_byid(p->mm,reg);
-    if(!r||r->rg_end<=r->rg_start||r->vmaid!=id||r->mode_bit!=0||off>=r->rg_end-r->rg_start||!b)goto done;
-    struct mm_struct *mm=p->krnl->mm;
-    addr_t va=r->rg_start+off,e=pte_get_entry(mm,va>>12,p);
-    if(!PAGING_PAGE_PRESENT(e)||(e&PAGING_PTE_SWAPPED_MASK))goto done;
-    struct framephy_struct *fp=p->krnl->mram->used_fp_list;
-    while(fp&&fp->fpn!=PAGING_FPN(e))fp=fp->fp_next;
-    if(!fp||fp->owner!=mm)goto done;
-    addr_t pa=PAGING_FPN(e)*4096+(va&4095);
-    ++mm->walks;mm->pt_accesses+=5;
-    rc=MEMPHY_read(p->krnl->mram,pa,b);
-    if(!rc){++mm->data_accesses;}
-done:pthread_mutex_unlock(&memory_lock);return rc;
+    return __read(caller, id, reg, offset, data);
+}
+/* __write_user_mem — Gọi đường ghi user có kiểm tra quyền, dùng trong COPY.
+ * Tham số: caller: PCB; id: VMA; reg: region; offset: độ lệch; data: byte.
+ * Trả về: Kết quả của __write (0 hoặc mã lỗi âm).
+ */
+int __write_user_mem(struct pcb_t *caller, int id, int reg, addr_t offset, BYTE data)
+{
+    return __write(caller, id, reg, offset, data);
+}
+/* __read_kernel_mem — Đọc byte từ region kernel do process sở hữu bằng bảng trang kernel.
+ * Tham số: caller: PCB; id: VMA; reg: region; offset: độ lệch; data: đầu ra.
+ * Trả về: 0 nếu thành công, -1 nếu lỗi.
+ */
+int __read_kernel_mem(struct pcb_t *caller, int id, int reg, addr_t offset, BYTE *data)
+{
+    pthread_mutex_lock(&memory_lock);
+    int result = -1;
+    // Bước 1: Kiểm tra region, mode và offset trước khi dịch địa chỉ.
+    struct vm_rg_struct *region = get_symrg_byid(caller->mm, reg);
+    if (region == NULL || region->rg_end <= region->rg_start || region->vmaid != id || region->mode_bit != 0) {
+        goto done;
+    }
+    addr_t region_size = region->rg_end - region->rg_start;
+    if (offset >= region_size || data == NULL) {
+        goto done;
+    }
+    // Bước 2: Chọn bảng trang kernel dùng chung, lấy PTE.
+    struct mm_struct *mm = caller->krnl->mm;
+    addr_t virtual_address = region->rg_start + offset;
+    addr_t page_number = virtual_address >> 12;
+    addr_t pte = pte_get_entry(mm, page_number, caller);
+    if (!PAGING_PAGE_PRESENT(pte) || (pte & PAGING_PTE_SWAPPED_MASK)) {
+        goto done;
+    }
+    // Bước 3: Kiểm tra frame thật sự thuộc memory manager này.
+    addr_t frame_number = PAGING_FPN(pte);
+    struct framephy_struct *current_frame = caller->krnl->mram->used_fp_list;
+    while (current_frame != NULL && current_frame->fpn != frame_number) {
+        current_frame = current_frame->fp_next;
+    }
+    if (current_frame == NULL || current_frame->owner != mm) {
+        goto done;
+    }
+    // Bước 4: PA = FPN * page size + offset 12 bit thấp.
+    addr_t page_offset = virtual_address & 4095;
+    addr_t physical_address = frame_number * PAGING64_PAGESZ + page_offset;
+    ++mm->walks;
+    mm->pt_accesses += 5;
+    // Bước 5: Truy cập RAM trong kernel và cập nhật thống kê.
+    result = MEMPHY_read(caller->krnl->mram, physical_address, data);
+    if (result == 0) {
+        ++mm->data_accesses;
+    }
+done:
+    // Mọi đường thoát sau khi lock đều đi qua đây.
+    pthread_mutex_unlock(&memory_lock);
+    return result;
 }
 
-int __write_kernel_mem(struct pcb_t *p,int id,int reg,addr_t off,BYTE b)
+/* __write_kernel_mem — Ghi byte vào region kernel, dùng bảng trang chung và đặt dirty bit.
+ * Tham số: caller: PCB; id: VMA; reg: region; offset: độ lệch; data: byte.
+ * Trả về: 0 nếu thành công, -1 nếu lỗi.
+ */
+int __write_kernel_mem(struct pcb_t *caller, int id, int reg, addr_t offset, BYTE data)
 {
-    pthread_mutex_lock(&memory_lock);int rc=-1;
-    struct vm_rg_struct *r=get_symrg_byid(p->mm,reg);
-    if(!r||r->rg_end<=r->rg_start||r->vmaid!=id||r->mode_bit!=0||off>=r->rg_end-r->rg_start)goto done;
-    struct mm_struct *mm=p->krnl->mm;
-    addr_t va=r->rg_start+off,e=pte_get_entry(mm,va>>12,p);
-    if(!PAGING_PAGE_PRESENT(e)||(e&PAGING_PTE_SWAPPED_MASK))goto done;
-    struct framephy_struct *fp=p->krnl->mram->used_fp_list;
-    while(fp&&fp->fpn!=PAGING_FPN(e))fp=fp->fp_next;
-    if(!fp||fp->owner!=mm)goto done;
-    addr_t pa=PAGING_FPN(e)*4096+(va&4095);
-    ++mm->walks;mm->pt_accesses+=5;
-    rc=MEMPHY_write(p->krnl->mram,pa,b);
-    if(!rc){++mm->data_accesses;pte_set_entry(mm,va>>12,e|PAGING_PTE_DIRTY_MASK,p);}
-done:pthread_mutex_unlock(&memory_lock);return rc;
+    pthread_mutex_lock(&memory_lock);
+    int result = -1;
+    // Bước 1: Kiểm tra region, mode và offset trước khi dịch địa chỉ.
+    struct vm_rg_struct *region = get_symrg_byid(caller->mm, reg);
+    if (region == NULL || region->rg_end <= region->rg_start || region->vmaid != id || region->mode_bit != 0) {
+        goto done;
+    }
+    addr_t region_size = region->rg_end - region->rg_start;
+    if (offset >= region_size) {
+        goto done;
+    }
+    // Bước 2: Chọn bảng trang kernel dùng chung, lấy PTE.
+    struct mm_struct *mm = caller->krnl->mm;
+    addr_t virtual_address = region->rg_start + offset;
+    addr_t page_number = virtual_address >> 12;
+    addr_t pte = pte_get_entry(mm, page_number, caller);
+    if (!PAGING_PAGE_PRESENT(pte) || (pte & PAGING_PTE_SWAPPED_MASK)) {
+        goto done;
+    }
+    // Bước 3: Kiểm tra frame thật sự thuộc memory manager này.
+    addr_t frame_number = PAGING_FPN(pte);
+    struct framephy_struct *current_frame = caller->krnl->mram->used_fp_list;
+    while (current_frame != NULL && current_frame->fpn != frame_number) {
+        current_frame = current_frame->fp_next;
+    }
+    if (current_frame == NULL || current_frame->owner != mm) {
+        goto done;
+    }
+    // Bước 4: PA = FPN * page size + offset 12 bit thấp.
+    addr_t page_offset = virtual_address & 4095;
+    addr_t physical_address = frame_number * PAGING64_PAGESZ + page_offset;
+    ++mm->walks;
+    mm->pt_accesses += 5;
+    // Bước 5: Truy cập RAM trong kernel và cập nhật thống kê.
+    result = MEMPHY_write(caller->krnl->mram, physical_address, data);
+    if (result == 0) {
+        ++mm->data_accesses;
+        pte_set_entry(mm, page_number, pte | PAGING_PTE_DIRTY_MASK, caller);
+    }
+done:
+    // Mọi đường thoát sau khi lock đều đi qua đây.
+    pthread_mutex_unlock(&memory_lock);
+    return result;
 }
-
 /* Public wrappers: khong dua PCB pointer vao kernel dispatcher.
  * Chi cac helper __alloc/__read/... da duoc handler goi moi truy cap MM. */
 
-int liballoc(struct pcb_t *p,addr_t size,uint32_t reg)
+/* liballoc — Wrapper instruction ALLOC: đóng gói size/register và gửi syscall theo PID.
+ * Tham số: caller: PCB ở user; size: số byte; reg: register đích.
+ * Trả về: 0 nếu thành công, mã lỗi của syscall nếu thất bại.
+ */
+int liballoc(struct pcb_t *caller, addr_t size, uint32_t reg)
 {
-    struct sc_regs r={.a1=SYSMEM_REGION_ALLOC,.a2=reg,.a3=size,.flags=SC_INTERNAL};
-    int rc=_syscall(p->krnl,p->pid,17,&r);
-    if(!rc)printf("[ALLOC] PID=%u reg=%u VA=%016"PRIx64" size=%"PRIu64"\n",p->pid,reg,r.a6,size);
-    return rc;
-}
-
-int libfree(struct pcb_t *p,uint32_t reg)
-{
-    struct sc_regs r={.a1=SYSMEM_REGION_FREE,.a2=reg,.flags=SC_INTERNAL};return _syscall(p->krnl,p->pid,17,&r);
-}
-
-int libread(struct pcb_t *p,uint32_t reg,addr_t off,uint32_t *out)
-{
-    struct sc_regs r={.a1=SYSMEM_REGION_READ,.a2=reg,.a3=off,.flags=SC_INTERNAL};
-    if(!out||_syscall(p->krnl,p->pid,17,&r))return -1;
-    *out=(uint32_t)r.a6;printf("[READ] PID=%u reg=%u offset=%"PRIu64" value=%u\n",p->pid,reg,off,*out);return 0;
-}
-
-int libwrite(struct pcb_t *p,BYTE b,uint32_t reg,addr_t off)
-{
-    struct sc_regs r={.a1=SYSMEM_REGION_WRITE,.a2=reg,.a3=off,.a4=(unsigned char)b,.flags=SC_INTERNAL};return _syscall(p->krnl,p->pid,17,&r);
-}
-
-/* Kernel co mot page table dung chung. Symbol cua kernel region nam
- * trong PCB chu so huu, ngan process khac truy cap region qua reg trung. */
-addr_t __kmalloc(struct pcb_t *p,int id,int reg,addr_t size,addr_t *out)
-{
-    int rc=-1;pthread_mutex_lock(&memory_lock);struct vm_rg_struct *s=get_symrg_byid(p->mm,reg);
-    struct mm_struct *mm=p->krnl->mm;struct vm_area_struct *v=mm->mmap;
-    if(!s||(s && s->rg_end>s->rg_start)||id!=0||!out||!size||size>8192ULL*4096)goto done;
-    addr_t n=(size+4095)/4096,va=v->vm_end;
-    struct vm_rg_struct mapped;
-    if(n>(UINT64_MAX-va)/4096||vm_map_kernel(p,v->vm_start,va+n*4096,va,(int)n,&mapped))goto done;
-    *s=(struct vm_rg_struct){.vmaid=id,.mode_bit=0,.rg_start=va,.rg_end=va+size};
-    v->vm_end=v->sbrk=va+n*4096;*out=va;p->regs[reg]=va;rc=0;
-#ifdef IODUMP
-    printf("[REGION] PID=%u reg=%d mode=kernel range=[%016"PRIx64",%016"PRIx64")\n",p->pid,reg,s->rg_start,s->rg_end);
-#endif
-
-done:pthread_mutex_unlock(&memory_lock);return rc?(addr_t)-1:0;
-}
-int libkmem_malloc(struct pcb_t *p,uint32_t size,uint32_t reg)
-{
-    struct sc_regs r={.a1=SYSMEM_KMALLOC,.a2=reg,.a3=size,.flags=SC_INTERNAL};
-    if(_syscall(p->krnl,p->pid,17,&r))return -1;
-    printf("[KMALLOC] PID=%u reg=%u VA=%016"PRIx64" size=%u\n",p->pid,reg,r.a6,size);return 0;
-}
-
-int libkmem_copy_from_user(struct pcb_t *p,uint32_t src,uint32_t dst,uint32_t off,uint32_t size)
-{
-    struct sc_regs r={.a1=SYSMEM_COPY_FROM,.a2=src,.a3=dst,.a4=off,.a5=size,.flags=SC_INTERNAL};return _syscall(p->krnl,p->pid,17,&r);
-}
-
-int libkmem_copy_to_user(struct pcb_t *p,uint32_t src,uint32_t dst,uint32_t off,uint32_t size)
-{
-    struct sc_regs r={.a1=SYSMEM_COPY_TO,.a2=src,.a3=dst,.a4=off,.a5=size,.flags=SC_INTERNAL};return _syscall(p->krnl,p->pid,17,&r);
-}
-
-int libmem_dma_memcpy(struct pcb_t *p,uint32_t src,uint32_t dst,uint32_t off,uint32_t size)
-{
-    /* DMA RTL thuoc phan co-processor. Khong gia lap thanh cong khi chua tich hop bus. */
-    (void)p;(void)src;(void)dst;(void)off;(void)size;return -ENOSYS;
-}
-int free_pcb_memph(struct pcb_t *p)
-{
-    if(!p||!p->mm)return -1;
-    pthread_mutex_lock(&memory_lock);
-    /* Bo PID khoi registry truoc khi huy MM. */
-    struct pcb_t **q=&p->krnl->processes;while(*q&&*q!=p)q=&(*q)->registry_next;
-    if(*q)*q=p->registry_next;
-    p->registry_next=NULL;
-    for(int i=0;i<REG_COUNT;++i){struct vm_rg_struct *r=get_symrg_byid(p->mm,i);if(r&&r->rg_end>r->rg_start&&!r->mode_bit)__free(p,0,i);}
-    struct mm_struct *mm=p->mm;
-    /* In thong ke truoc khi giai phong bang trang. */
-#ifdef PAGETBL_DUMP
-    print_pgtbl(p,0,UINT64_MAX);
-#else
-    print_pgtbl(p,1,0);
-#endif
-    /* DFS lap postorder: free frame o la, free bang khi da tham het. */
-    addr_t *t[5]={mm->pgd};int next[5]={0},d=0;
-    if(t[0])while(d>=0){
-        if(next[d]==512){free(t[d]);--d;continue;}
-        int i=next[d]++;if(!t[d][i])continue;
-        if(d<4){t[d+1]=(addr_t *)(uintptr_t)t[d][i];next[++d]=0;}
-        else if(PAGING_PAGE_PRESENT(t[d][i]))MEMPHY_put_freefp(p->krnl->mram,PAGING_FPN(t[d][i]));
+    struct sc_regs request = {0};
+    request.a1 = SYSMEM_REGION_ALLOC;
+    request.a2 = reg;
+    request.a3 = size;
+    request.flags = SC_INTERNAL;
+    int result = _syscall(caller->krnl, caller->pid, 17, &request);
+    if (!result) {
+        printf("[ALLOC] PID=%u reg=%u VA=%016" PRIx64 " size=%" PRIu64 "\n", caller->pid, reg, request.a6, size);
     }
-    while(mm->mmap){struct vm_area_struct *v=mm->mmap;mm->mmap=v->vm_next;
-        while(v->vm_freerg_list){struct vm_rg_struct *r=v->vm_freerg_list;v->vm_freerg_list=r->rg_next;free(r);}free(v);}
-    while(mm->fifo_pgn){struct pgn_t *n=mm->fifo_pgn;mm->fifo_pgn=n->pg_next;free(n);}
-    free(mm);p->mm=NULL;
-    pthread_mutex_unlock(&memory_lock);return 0;
+    return result;
 }
 
-int find_victim_page(struct mm_struct *mm,addr_t *out)
+/* libfree — Wrapper FREE: gửi register chứa region cần giải phóng.
+ * Tham số: caller: PCB; reg: region ID.
+ * Trả về: 0 nếu thành công, mã lỗi nếu thất bại.
+ */
+int libfree(struct pcb_t *caller, uint32_t reg)
 {
-    if(!mm||!out||!mm->fifo_pgn)return -1;
-    struct pgn_t **p=&mm->fifo_pgn;while((*p)->pg_next)p=&(*p)->pg_next;
-    *out=(*p)->pgn;free(*p);*p=NULL;return 0;
+    struct sc_regs request = {0};
+    request.a1 = SYSMEM_REGION_FREE;
+    request.a2 = reg;
+    request.flags = SC_INTERNAL;
+    return _syscall(caller->krnl, caller->pid, 17, &request);
+}
+
+/* libread — Wrapper READ: gửi region và offset, nhận byte qua a6.
+ * Tham số: caller: PCB; reg: region; offset: độ lệch; out: nơi nhận byte dạng uint32_t.
+ * Trả về: 0 nếu thành công, -1 nếu lỗi.
+ */
+int libread(struct pcb_t *caller, uint32_t reg, addr_t offset, uint32_t *out)
+{
+    struct sc_regs request = {0};
+    request.a1 = SYSMEM_REGION_READ;
+    request.a2 = reg;
+    request.a3 = offset;
+    request.flags = SC_INTERNAL;
+    if (!out || _syscall(caller->krnl, caller->pid, 17, &request)) {
+        return -1;
+    }
+    *out = (uint32_t)request.a6;
+    printf("[READ] PID=%u reg=%u offset=%" PRIu64 " value=%u\n", caller->pid, reg, offset, *out);
+    return 0;
+}
+
+/* libwrite — Wrapper WRITE: gửi giá trị byte, region, offset qua syscall.
+ * Tham số: caller: PCB; data: byte; reg: region; offset: độ lệch.
+ * Trả về: 0 nếu thành công, mã lỗi nếu thất bại.
+ */
+int libwrite(struct pcb_t *caller, BYTE data, uint32_t reg, addr_t offset)
+{
+    struct sc_regs request = {0};
+    request.a1 = SYSMEM_REGION_WRITE;
+    request.a2 = reg;
+    request.a3 = offset;
+    request.a4 = (unsigned char)data;
+    request.flags = SC_INTERNAL;
+    return _syscall(caller->krnl, caller->pid, 17, &request);
+}
+/* Kernel có bảng trang chung, descriptor region nằm trong PCB sở hữu. */
+/* __kmalloc — Cấp phát region kernel từ dãy frame liên tục, lưu descriptor trong PCB.
+ * Tham số: caller: PCB; id: VMA 0; reg: register; size: số byte; out: VA kernel đầu ra.
+ * Trả về: 0 nếu thành công, (addr_t)-1 nếu lỗi.
+ */
+addr_t __kmalloc(struct pcb_t *caller, int id, int reg, addr_t size, addr_t *out)
+{
+    int result = -1;
+    pthread_mutex_lock(&memory_lock);
+    struct vm_rg_struct *symbol_region = get_symrg_byid(caller->mm, reg);
+    struct mm_struct *mm = caller->krnl->mm;
+    struct vm_area_struct *vma = mm->mmap;
+    // Bước 1: Kiểm tra symbol trống và size hợp lệ.
+    if (symbol_region == NULL || id != 0 || out == NULL || size == 0 ||
+        size > 8192ULL * PAGING64_PAGESZ) {
+        goto done;
+    }
+    if (symbol_region->rg_end > symbol_region->rg_start) {
+        goto done;
+    }
+    // Bước 2: Làm tròn kích thước lên số trang, cấp phát liên tục.
+    addr_t page_count = (size + 4095) / PAGING64_PAGESZ;
+    addr_t virtual_address = vma->vm_end;
+    struct vm_rg_struct mapped;
+    if (page_count > (UINT64_MAX - virtual_address) / 4096 || vm_map_kernel(caller, vma->vm_start, virtual_address + page_count*4096, virtual_address, (int)page_count, &mapped)) {
+        goto done;
+    }
+    // Bước 3: Ghi descriptor kernel vào symbol của process sở hữu.
+    *symbol_region = (struct vm_rg_struct){0};
+    symbol_region->vmaid = id;
+    symbol_region->mode_bit = 0;
+    symbol_region->rg_start = virtual_address;
+    symbol_region->rg_end = virtual_address + size;
+    vma->vm_end = vma->sbrk = virtual_address + page_count*4096;
+    *out = virtual_address;
+    caller->regs[reg] = virtual_address;
+    result = 0;
+#ifdef IODUMP
+    printf("[REGION] PID=%u reg=%d mode=kernel range=[%016" PRIx64 ",%016" PRIx64 ")\n", caller->pid, reg, symbol_region->rg_start, symbol_region->rg_end);
+#endif
+
+done:
+    pthread_mutex_unlock(&memory_lock);
+    if (result != 0) {
+        return (addr_t)-1;
+    }
+    return 0;
+}
+/* libkmem_malloc — Wrapper KMALLOC, giữ kiểu uint32_t của framework.
+ * Tham số: caller: PCB; size: số byte; reg: register đích.
+ * Trả về: 0 nếu thành công, -1 nếu lỗi.
+ */
+int libkmem_malloc(struct pcb_t *caller, uint32_t size, uint32_t reg)
+{
+    struct sc_regs request = {0};
+    request.a1 = SYSMEM_KMALLOC;
+    request.a2 = reg;
+    request.a3 = size;
+    request.flags = SC_INTERNAL;
+    if (_syscall(caller->krnl, caller->pid, 17, &request)) {
+        return -1;
+    }
+    printf("[KMALLOC] PID=%u reg=%u VA=%016" PRIx64 " size=%u\n", caller->pid, reg, request.a6, size);
+    return 0;
+}
+
+/* libkmem_copy_from_user — Wrapper sao chép từ user region sang kernel region qua syscall.
+ * Tham số: caller: PCB; src/dst: region nguồn/đích; offset: độ lệch chung; size: số byte.
+ * Trả về: 0 nếu thành công, mã lỗi nếu thất bại.
+ */
+int libkmem_copy_from_user(struct pcb_t *caller, uint32_t src, uint32_t dst, uint32_t offset, uint32_t size)
+{
+    struct sc_regs request = {0};
+    request.a1 = SYSMEM_COPY_FROM;
+    request.a2 = src;
+    request.a3 = dst;
+    request.a4 = offset;
+    request.a5 = size;
+    request.flags = SC_INTERNAL;
+    return _syscall(caller->krnl, caller->pid, 17, &request);
+}
+
+/* libkmem_copy_to_user — Wrapper sao chép từ kernel region sang user region qua syscall.
+ * Tham số: caller: PCB; src/dst: region nguồn/đích; offset: độ lệch chung; size: số byte.
+ * Trả về: 0 nếu thành công, mã lỗi nếu thất bại.
+ */
+int libkmem_copy_to_user(struct pcb_t *caller, uint32_t src, uint32_t dst, uint32_t offset, uint32_t size)
+{
+    struct sc_regs request = {0};
+    request.a1 = SYSMEM_COPY_TO;
+    request.a2 = src;
+    request.a3 = dst;
+    request.a4 = offset;
+    request.a5 = size;
+    request.flags = SC_INTERNAL;
+    return _syscall(caller->krnl, caller->pid, 17, &request);
+}
+
+/* libmem_dma_memcpy — Giữ giao diện DMA của framework; chưa tích hợp co-processor trong phần
+ * này.
+ * Tham số: caller: PCB; src/dst: region; offset: độ lệch; size: số byte (chưa dùng).
+ * Trả về: -ENOSYS, không báo thành công giả.
+ */
+int libmem_dma_memcpy(struct pcb_t *caller, uint32_t src, uint32_t dst, uint32_t offset, uint32_t size)
+{
+    /* DMA thuộc phần co-processor. Không báo thành công khi chưa tích hợp bus. */
+    (void)caller;
+    (void)src;
+    (void)dst;
+    (void)offset;
+    (void)size;
+    return -ENOSYS;
+}
+/* free_pcb_memph — Thu hồi region kernel, frame user, cây bảng trang, VMA; gỡ PID khỏi
+ * registry.
+ * Tham số: caller: PCB cần thu hồi MM (PCB giả đối với kernel lúc shutdown).
+ * Trả về: 0 nếu thành công, -1 nếu PCB/MM NULL. Không free bản thân PCB.
+ */
+int free_pcb_memph(struct pcb_t *caller)
+{
+    if (!caller || !caller->mm) {
+        return -1;
+    }
+    pthread_mutex_lock(&memory_lock);
+    // Bước 1: Gỡ PID khỏi registry trước khi hủy MM.
+    struct pcb_t *current = caller->krnl->processes;
+    struct pcb_t *previous = NULL;
+    while (current != NULL && current != caller) {
+        previous = current;
+        current = current->registry_next;
+    }
+    if (current != NULL) {
+        if (previous == NULL) {
+            caller->krnl->processes = caller->registry_next;
+        } else {
+            previous->registry_next = caller->registry_next;
+        }
+    }
+    caller->registry_next = NULL;
+    for (int i = 0; i < REG_COUNT; ++i) {
+        struct vm_rg_struct *region = get_symrg_byid(caller->mm, i);
+        if (region && region->rg_end > region->rg_start && !region->mode_bit) {
+            __free(caller, 0, i);
+        }
+    }
+    struct mm_struct *mm = caller->mm;
+    // Bước 2: In thống kê trước khi thu hồi cây bảng trang.
+#ifdef PAGETBL_DUMP
+    print_pgtbl(caller, 0, UINT64_MAX);
+#else
+    print_pgtbl(caller, 1, 0);
+#endif
+    // DFS postorder: trả frame ở PT trước, sau đó free bảng đã duyệt hết.
+    addr_t *tables_by_level[5] = {mm->pgd};
+    int next_entry[5] = {0};
+    int depth = 0;
+    if (tables_by_level[0]) {
+        while (depth >= 0) {
+            if (next_entry[depth] == 512) {
+                free(tables_by_level[depth]);
+                --depth;
+                continue;
+            }
+            int i = next_entry[depth]++;
+            if (!tables_by_level[depth][i]) {
+                continue;
+            }
+            if (depth < 4) {
+                tables_by_level[depth + 1] = (addr_t *)(uintptr_t)tables_by_level[depth][i];
+                ++depth;
+                next_entry[depth] = 0;
+            } else if (PAGING_PAGE_PRESENT(tables_by_level[depth][i])) {
+                MEMPHY_put_freefp(caller->krnl->mram, PAGING_FPN(tables_by_level[depth][i]));
+            }
+        }
+    }
+    // Bước 3: Thu hồi VMA, free region và danh sách FIFO.
+    while (mm->mmap != NULL) {
+        struct vm_area_struct *vma = mm->mmap;
+        mm->mmap = vma->vm_next;
+        while (vma->vm_freerg_list) {
+            struct vm_rg_struct *free_region = vma->vm_freerg_list;
+            vma->vm_freerg_list = free_region->rg_next;
+            free(free_region);
+        }
+        free(vma);
+    }
+    while (mm->fifo_pgn != NULL) {
+        struct pgn_t *page_node = mm->fifo_pgn;
+        mm->fifo_pgn = page_node->pg_next;
+        free(page_node);
+    }
+    free(mm);
+    caller->mm = NULL;
+    pthread_mutex_unlock(&memory_lock);
+    return 0;
+}
+
+/* find_victim_page — Lấy page cũ nhất khỏi danh sách FIFO nếu có (chưa được gọi để eviction tự
+ * động).
+ * Tham số: mm: memory manager; out: nơi nhận số trang.
+ * Trả về: 0 nếu có page, -1 nếu danh sách rỗng/lỗi.
+ */
+int find_victim_page(struct mm_struct *mm, addr_t *out)
+{
+    if (mm == NULL || out == NULL || mm->fifo_pgn == NULL) {
+        return -1;
+    }
+    // Danh sách thêm ở đầu, page cũ nhất ở cuối.
+    struct pgn_t *previous = NULL;
+    struct pgn_t *current = mm->fifo_pgn;
+    while (current->pg_next != NULL) {
+        previous = current;
+        current = current->pg_next;
+    }
+    *out = current->pgn;
+    if (previous == NULL) {
+        mm->fifo_pgn = NULL;
+    } else {
+        previous->pg_next = NULL;
+    }
+    free(current);
+    return 0;
 }
