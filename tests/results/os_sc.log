@@ -1,0 +1,12 @@
+[MM-CONFIG] RAM=2048 page=4096 usable_frames=0 kernel_base=ff00000000000000
+Time slot   0
+Time slot   1
+Time slot   2
+	Loaded a process at input/proc/sc3, PID: 1 PRIO: 15
+	CPU 0: Dispatched process  1
+[INSTRUCTION-ERROR] PID=1 PC=0 opcode=9 rc=-38
+Time slot   3
+	CPU 0: Processed  1 has finished
+[MM-STATS] PID=1 user PGD=1 P4D=0 PUD=0 PMD=0 PT=0 bytes=4096 peak_bytes=4096 walks=0 pt_access=0 data_access=0 total=0
+	CPU 0 stopped
+[MM-STATS] PID=0 kernel PGD=1 P4D=0 PUD=0 PMD=0 PT=0 bytes=4096 peak_bytes=4096 walks=0 pt_access=0 data_access=0 total=0

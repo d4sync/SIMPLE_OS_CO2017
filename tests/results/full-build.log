@@ -1,0 +1,24 @@
+mkdir -p obj
+gcc -iquote include -std=gnu11 -c -g src/cpu.c -o obj/cpu.o
+gcc -iquote include -std=gnu11 -c -g src/mem.c -o obj/mem.o
+gcc -iquote include -std=gnu11 -c -g src/loader.c -o obj/loader.o
+gcc -iquote include -std=gnu11 -c -g src/queue.c -o obj/queue.o
+gcc -iquote include -std=gnu11 -c -g src/os.c -o obj/os.o
+gcc -iquote include -std=gnu11 -c -g src/sched.c -o obj/sched.o
+gcc -iquote include -std=gnu11 -c -g src/timer.c -o obj/timer.o
+gcc -iquote include -std=gnu11 -c -g src/mm-vm.c -o obj/mm-vm.o
+gcc -iquote include -std=gnu11 -c -g src/mm64.c -o obj/mm64.o
+gcc -iquote include -std=gnu11 -c -g src/mm.c -o obj/mm.o
+gcc -iquote include -std=gnu11 -c -g src/mm-memphy.c -o obj/mm-memphy.o
+gcc -iquote include -std=gnu11 -c -g src/libstd.c -o obj/libstd.o
+gcc -iquote include -std=gnu11 -c -g src/libmem.c -o obj/libmem.o
+gcc -iquote include -std=gnu11 -c -g src/syscall.c -o obj/syscall.o
+gcc -iquote include -std=gnu11 -c -g src/sys_mem.c -o obj/sys_mem.o
+gcc -iquote include -std=gnu11 -c -g src/sys_listsyscall.c -o obj/sys_listsyscall.o
+g++ -iquote include -I/usr/share/verilator/include -I/usr/share/verilator/include/vltstd -std=gnu++14 -c -g -DDEBUG_ENABLED=1 src/Vdma_top.cpp -o obj/Vdma_top.o
+In file included from src/Vdma_top.cpp:4:
+include/Vdma_top__pch.h:29:10: fatal error: verilated.h: No such file or directory
+   29 | #include "verilated.h"
+      |          ^~~~~~~~~~~~~
+compilation terminated.
+make: *** [Makefile:112: obj/Vdma_top.o] Error 1

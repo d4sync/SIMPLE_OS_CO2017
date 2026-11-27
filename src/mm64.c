@@ -1,0 +1,287 @@
+#define _GNU_SOURCE
+/*
+ * Copyright (C) 2026 pdnguyen of HCMC University of Technology VNU-HCM
+ */
+
+/* LamiaAtrium release
+ * Source Code License Grant: The authors hereby grant to Licensee
+ * personal permission to use and modify the Licensed Source Code
+ * for the sole purpose of studying while attending the course CO2018.
+ */
+
+/*
+ * PAGING based Memory Management
+ * Memory management unit mm/mm.c
+ */
+
+#include "mm64.h"
+#include <stdlib.h>
+#include <string.h>
+#include <pthread.h>
+#include <inttypes.h>
+#include <limits.h>
+
+#ifdef MM64
+/* Mot khoa de serialize transaction VM, syscall va thu hoi PCB.
+ * Recursive vi libmem -> syscall -> handler cung nam trong transaction. */
+pthread_mutex_t memory_lock = PTHREAD_RECURSIVE_MUTEX_INITIALIZER_NP;
+
+int get_pd_from_address(addr_t va, addr_t *pgd, addr_t *p4d, addr_t *pud,
+                        addr_t *pmd, addr_t *pt)
+{
+    if(!pgd||!p4d||!pud||!pmd||!pt)return -1;
+    if ((va >> 57) != (((va >> 56) & 1) ? 127 : 0)) return -1;
+    *pgd = (va >> 48) & 511; *p4d = (va >> 39) & 511;
+    *pud = (va >> 30) & 511; *pmd = (va >> 21) & 511;
+    *pt = (va >> 12) & 511;
+    return 0;
+}
+
+int get_pd_from_pagenum(addr_t pgn, addr_t *pgd, addr_t *p4d, addr_t *pud, addr_t *pmd, addr_t *pt)
+{
+    if (pgn > (UINT64_MAX >> 12)) return -1;
+    addr_t va = pgn << 12;
+    if (pgn < PAGING64_MAX_PGN && (va & (UINT64_C(1) << 56)))
+        va |= UINT64_C(0xfe00000000000000);
+    return get_pd_from_address(va, pgd, p4d, pud, pmd, pt);
+}
+
+/* Moi directory gom 512 entry 8 byte. 4 cap tren chua host pointer,
+ * cap cuoi chua PTE 32 bit trong slot 64 bit. Khong cap phat bang phang. */
+
+int init_pte(addr_t *pte, int pre, addr_t fpn, int drt, int swp, int type, addr_t off)
+{
+    if (!pte) return -1;
+    if (swp) {
+        if (type<0 || type>=PAGING_MAX_MMSWP || off>(PAGING_PTE_SWPOFF_MASK>>5)) return -1;
+        *pte=PAGING_PTE_SWAPPED_MASK | ((addr_t)type) | (off<<5);
+    } else if (pre) {
+        if (fpn>PAGING_PTE_FPN_MASK) return -1;
+        *pte=PAGING_PTE_PRESENT_MASK | fpn | (drt ? PAGING_PTE_DIRTY_MASK:0);
+    } else *pte=0;
+    return 0;
+}
+addr_t pte_get_entry(struct mm_struct *mm, addr_t pgn, struct pcb_t *caller)
+{
+    (void)caller;
+    addr_t idx[5];
+    if (!mm || !mm->pgd || get_pd_from_pagenum(pgn,idx,idx+1,idx+2,idx+3,idx+4)) return 0;
+    addr_t *table=mm->pgd;
+    /* Duyet cay, khong tao bang khi doc PTE. */
+    for(int l=0;l<4;++l){
+        if(!table[idx[l]]) return 0;
+        table=(addr_t *)(uintptr_t)table[idx[l]];
+    }
+    return table[idx[4]];
+}
+
+int pte_set_entry(struct mm_struct *mm, addr_t pgn, uint64_t value, struct pcb_t *caller)
+{
+    (void)caller;
+    addr_t idx[5], *t[5];
+    if(!mm || !mm->pgd || value>UINT32_MAX || get_pd_from_pagenum(pgn,idx,idx+1,idx+2,idx+3,idx+4)) return -1;
+    t[0]=mm->pgd;
+    int depth=0, rc=0;
+    /* Cap phat dong chi khi entry can duoc ghi. */
+    while(depth<4){
+        if(!t[depth][idx[depth]]){
+            if(!value) break;
+            addr_t *child=calloc(512,sizeof(addr_t));
+            if(!child){rc=-1;break;}
+            t[depth][idx[depth]]=(addr_t)(uintptr_t)child;
+            ++mm->tables[3-depth];
+            uint64_t n=0; for(int i=0;i<5;++i)n+=mm->tables[i];
+            if(n>mm->peak_tables)mm->peak_tables=n;
+        }
+        t[depth+1]=(addr_t *)(uintptr_t)t[depth][idx[depth]];
+        ++depth;
+    }
+    if(depth==4)t[4][idx[4]]=value;
+    /* Thu hoi cac nhanh rong sau unmap hoac calloc that bai. */
+    if(!value||rc){
+        for(int l=depth;l>0;--l){
+            int empty=1;for(int j=0;j<512;++j)if(t[l][j]){empty=0;break;}
+            if(!empty)break;
+            free(t[l]);--mm->tables[4-l];t[l-1][idx[l-1]]=0;
+        }
+    }
+    return rc;
+}
+
+int pte_set_fpn(struct mm_struct *mm, addr_t pgn, addr_t fpn, struct pcb_t *caller)
+{
+    addr_t e;
+    if (init_pte(&e,1,fpn,0,0,0,0)) return -1;
+    return pte_set_entry(mm,pgn,e,caller);
+}
+int pte_set_swap(struct pcb_t *caller, addr_t pgn, int type, addr_t off)
+{
+    addr_t e;
+    if (!caller || init_pte(&e,0,0,0,1,type,off)) return -1;
+    return pte_set_entry(caller->mm,pgn,e,caller);
+}
+
+/* Rollback neu RAM het hoac calloc bang trang that bai. FPN 13 bit
+ * gioi han RAM anh xa 8192 frame; khong cat mat bit cao cua FPN. */
+
+int vmap_pgd_memset(struct pcb_t *caller, addr_t va, int count)
+{
+    if (!caller || count<=0 || count>8192 || (va&4095) || va>=UINT64_C(0x0100000000000000)) return -1;
+    struct vm_area_struct *v=get_vma_by_num(caller->mm,0);
+    if(!v)return -1;
+    addr_t bytes=(addr_t)count*4096;
+    if(va==v->vm_end)return inc_vma_limit(caller,0,bytes);
+    if(va<v->vm_start || va>v->vm_end || bytes>v->vm_end-va)return -1;
+    for(int i=0;i<count;++i){
+        addr_t e=pte_get_entry(caller->mm,(va>>12)+i,caller);
+        if(!PAGING_PAGE_PRESENT(e)||(e&PAGING_PTE_SWAPPED_MASK))return -1;
+        struct framephy_struct *fp=caller->krnl->mram->used_fp_list;
+        while(fp&&fp->fpn!=PAGING_FPN(e))fp=fp->fp_next;
+        if(!fp||fp->owner!=caller->mm)return -1;
+    }
+    for(int i=0;i<count;++i){
+        addr_t pgn=(va>>12)+i,e=pte_get_entry(caller->mm,pgn,caller);
+        pte_set_entry(caller->mm,pgn,e|PAGING_PTE_DIRTY_MASK,caller);
+        memset(caller->krnl->mram->storage+PAGING_FPN(e)*4096,0,4096);
+        ++caller->mm->walks;caller->mm->pt_accesses+=5;caller->mm->data_accesses+=4096;
+    }
+    return 0;
+}
+
+addr_t alloc_pages_range(struct pcb_t *proc, int count, struct framephy_struct **list)
+{
+    if (!proc || !list || count<0 || count>8192) return (addr_t)-1;
+    *list=NULL; struct framephy_struct **tail=list;
+    for (int i=0;i<count;++i) {
+        struct framephy_struct *p=calloc(1,sizeof(*p));
+        if (!p) goto fail;
+        if (MEMPHY_get_freefp(proc->krnl->mram,&p->fpn)) {free(p); goto fail;}
+        if (p->fpn>PAGING_PTE_FPN_MASK) {MEMPHY_put_freefp(proc->krnl->mram,p->fpn);free(p);goto fail;}
+        *tail=p;tail=&p->fp_next;
+    }
+    return 0;
+fail:
+    while (*list) {struct framephy_struct *p=*list;*list=p->fp_next;MEMPHY_put_freefp(proc->krnl->mram,p->fpn);free(p);}
+    return (addr_t)-1;
+}
+addr_t vmap_page_range(struct pcb_t *proc, addr_t va, int count, struct framephy_struct *frames, struct vm_rg_struct *rg)
+{
+    if (!proc || !rg || count<=0 || count>8192 || (va&4095) || va>=UINT64_C(0x0100000000000000) || (addr_t)count>(UINT64_C(0x0100000000000000)-va)/4096) return (addr_t)-1;
+    struct framephy_struct *p=frames;
+    for (int i=0;i<count;++i) {
+        if (!p || p->fpn>PAGING_PTE_FPN_MASK || pte_get_entry(proc->mm,(va>>12)+i,proc)) return (addr_t)-1;
+        p=p->fp_next;
+    }
+    int i=0;
+    for (p=frames;i<count;p=p->fp_next,++i) {
+        if (pte_set_fpn(proc->mm,(va>>12)+i,p->fpn,proc)) break;
+        for(struct framephy_struct *f=proc->krnl->mram->used_fp_list;f;f=f->fp_next) if(f->fpn==p->fpn){f->owner=proc->mm;break;}
+    }
+    if (i<count) { for(int j=0;j<i;++j) pte_set_entry(proc->mm,(va>>12)+j,0,proc); return (addr_t)-1; }
+    *rg=(struct vm_rg_struct){.mode_bit=1,.rg_start=va,.rg_end=va+(addr_t)count*4096};
+    return 0;
+}
+addr_t vm_map_ram(struct pcb_t *proc, addr_t start, addr_t end, addr_t va, int count, struct vm_rg_struct *rg)
+{
+    if(!proc||!rg||count<=0||count>8192||(va&4095)||va<start||va>end||end>UINT64_C(0x0100000000000000)||(addr_t)count>(end-va)/4096)return (addr_t)-1;
+    struct framephy_struct *frames=NULL;
+    if(alloc_pages_range(proc,count,&frames))return (addr_t)-1;
+    addr_t rc=vmap_page_range(proc,va,count,frames,rg);
+    while(frames){struct framephy_struct *f=frames;frames=f->fp_next;
+        if(rc)MEMPHY_put_freefp(proc->krnl->mram,f->fpn);
+        free(f);
+    }
+    return rc;
+}
+
+addr_t vm_map_kernel(struct pcb_t *proc, addr_t start, addr_t end, addr_t va, int count, struct vm_rg_struct *rg)
+{
+    if(!proc||!rg||count<=0||count>8192||(va&4095)||va<start||va<proc->krnl->kernel_base||va>end||(addr_t)count>(end-va)/4096)return (addr_t)-1;
+    struct mm_struct *mm=proc->krnl->mm;
+    struct memphy_struct *ram=proc->krnl->mram;
+    for(int i=0;i<count;++i)if(pte_get_entry(mm,(va>>12)+i,proc))return (addr_t)-1;
+    /* Tim day frame lien tuc trong free list sap xep. */
+    struct framephy_struct **p=&ram->free_fp_list;
+    while(*p){
+        struct framephy_struct *q=*p; int n=1;
+        while(n<count&&q->fp_next&&q->fp_next->fpn==q->fpn+1){q=q->fp_next;++n;}
+        if(n==count&&q->fpn<=PAGING_PTE_FPN_MASK){
+            addr_t first=(*p)->fpn;
+            struct framephy_struct *head=*p;*p=q->fp_next;q->fp_next=ram->used_fp_list;ram->used_fp_list=head;
+            memset(ram->storage+first*4096,0,(size_t)count*4096);
+            int i=0;struct framephy_struct *f=head;
+            for(;i<count;++i,f=f->fp_next){
+                f->owner=mm;
+                if(pte_set_fpn(mm,(va>>12)+i,first+i,proc))break;
+            }
+            if(i<count){
+                for(int j=0;j<i;++j)pte_set_entry(mm,(va>>12)+j,0,proc);
+                for(int j=0;j<count;++j)MEMPHY_put_freefp(ram,first+j);
+                return (addr_t)-1;
+            }
+            *rg=(struct vm_rg_struct){.mode_bit=0,.rg_start=va,.rg_end=va+(addr_t)count*4096};return 0;
+        }
+        p=&q->fp_next;
+    }
+    return (addr_t)-1;
+}
+
+int __swap_cp_page(struct memphy_struct *src, addr_t sf, struct memphy_struct *dst, addr_t df)
+{
+    if (!src || !dst || sf >= (addr_t)src->maxsz/4096 || df >= (addr_t)dst->maxsz/4096) return -1;
+    for (addr_t i=0;i<4096;++i) {BYTE b;if(MEMPHY_read(src,sf*4096+i,&b)||MEMPHY_write(dst,df*4096+i,b))return -1;}
+    return 0;
+}
+int init_mm(struct mm_struct *mm, struct pcb_t *caller)
+{
+    if (!mm) return -1;
+    memset(mm,0,sizeof(*mm));
+    mm->pgd=calloc(512,sizeof(addr_t));
+    if(mm->pgd)mm->tables[4]=mm->peak_tables=1;
+    mm->mmap=calloc(1,sizeof(*mm->mmap));
+    if (!mm->pgd || !mm->mmap) { free(mm->pgd);free(mm->mmap);memset(mm,0,sizeof(*mm));return -1; }
+    mm->mmap->vm_mm=mm;
+    mm->mmap->vm_start=caller ? 0:KERNEL_BASE_DEFAULT;
+    mm->mmap->vm_end=mm->mmap->sbrk=mm->mmap->vm_start;
+    return 0;
+}
+struct vm_rg_struct *init_vm_rg(addr_t start, addr_t end)
+{
+    struct vm_rg_struct *r=calloc(1,sizeof(*r));
+    if(r){r->rg_start=start;r->rg_end=end;r->mode_bit=1;}return r;
+}
+int enlist_vm_rg_node(struct vm_rg_struct **list,struct vm_rg_struct *r)
+{
+    if(!list||!r)return -1;
+    r->rg_next=*list;*list=r;return 0;
+}
+int enlist_pgn_node(struct pgn_t **list,addr_t pgn)
+{
+    struct pgn_t *p=malloc(sizeof(*p));if(!p)return -1;p->pgn=pgn;p->pg_next=*list;*list=p;return 0;
+}
+
+int print_pgtbl(struct pcb_t *p, addr_t start, addr_t end)
+{
+    if(!p||!p->mm||!p->mm->pgd)return -1;
+    pthread_mutex_lock(&memory_lock);
+    struct mm_struct *mm=p->mm;
+    /* DFS lap thay de quy: stack 5 cap, khong can ham phu. */
+    addr_t *t[5]={mm->pgd};addr_t prefix[5]={0};int next[5]={0},d=0;
+    if(start<=end)while(d>=0){
+        if(next[d]==512){--d;continue;}
+        int i=next[d]++;if(!t[d][i])continue;
+        addr_t va=prefix[d]|((addr_t)i<<(48-9*d));
+        if(d<4){t[d+1]=(addr_t *)(uintptr_t)t[d][i];prefix[d+1]=va;next[++d]=0;}
+        else{if(va&(UINT64_C(1)<<56))va|=UINT64_C(0xfe00000000000000);
+            if(va>=start&&va<=end)printf("  VA=%016"PRIx64" PTE=%08"PRIx64" FPN=%"PRIu64"\n",va,t[d][i],(addr_t)PAGING_FPN(t[d][i]));}
+    }
+    uint64_t n=0;for(int i=0;i<5;++i)n+=mm->tables[i];
+    printf("[MM-STATS] PID=%u %s PGD=%"PRIu64" P4D=%"PRIu64" PUD=%"PRIu64" PMD=%"PRIu64" PT=%"PRIu64" bytes=%"PRIu64" peak_bytes=%"PRIu64" walks=%"PRIu64" pt_access=%"PRIu64" data_access=%"PRIu64" total=%"PRIu64"\n",p->pid,mm==p->krnl->mm?"kernel":"user",mm->tables[4],mm->tables[3],mm->tables[2],mm->tables[1],mm->tables[0],n*512*sizeof(addr_t),mm->peak_tables*512*sizeof(addr_t),mm->walks,mm->pt_accesses,mm->data_accesses,mm->pt_accesses+mm->data_accesses);
+    pthread_mutex_unlock(&memory_lock);return 0;
+}
+
+int print_list_fp(struct framephy_struct *p){for(;p;p=p->fp_next)printf("frame=%"PRIu64"\n",p->fpn);return 0;}
+int print_list_rg(struct vm_rg_struct *r){for(;r;r=r->rg_next)printf("region=%"PRIu64"..%"PRIu64"\n",r->rg_start,r->rg_end);return 0;}
+int print_list_vma(struct vm_area_struct *v){for(;v;v=v->vm_next)printf("VMA=%"PRIu64"..%"PRIu64"\n",v->vm_start,v->vm_end);return 0;}
+int print_list_pgn(struct pgn_t *p){for(;p;p=p->pg_next)printf("page=%"PRIu64"\n",p->pgn);return 0;}
+#endif

@@ -1,0 +1,120 @@
+[MM-CONFIG] RAM=131072 page=4096 usable_frames=32 kernel_base=ff10000000000000
+Time slot   0
+	Loaded a process at input/proc/mm_usr_demo, PID: 1 PRIO: 1
+Time slot   1
+	Loaded a process at input/proc/mm_usr_demo, PID: 2 PRIO: 1
+	CPU 1: Dispatched process  1
+[REGION] PID=1 reg=0 mode=user range=[0000000000000000,0000000000002001) sbrk=0000000000003000
+region=8193..12288
+[ALLOC] PID=1 reg=0 VA=0000000000000000 size=8193
+	CPU 0: Dispatched process  2
+[REGION] PID=2 reg=0 mode=user range=[0000000000000000,0000000000002001) sbrk=0000000000003000
+region=8193..12288
+[ALLOC] PID=2 reg=0 VA=0000000000000000 size=8193
+Time slot   2
+[REGION] PID=2 reg=1 mode=user range=[0000000000002001,0000000000004002) sbrk=0000000000005000
+region=16386..20480
+[ALLOC] PID=2 reg=1 VA=0000000000002001 size=8193
+[REGION] PID=1 reg=1 mode=user range=[0000000000002001,0000000000004002) sbrk=0000000000005000
+region=16386..20480
+[ALLOC] PID=1 reg=1 VA=0000000000002001 size=8193
+Time slot   3
+	CPU 1: Put process  1 to run queue
+	CPU 1: Dispatched process  1
+	CPU 0: Put process  2 to run queue
+	CPU 0: Dispatched process  2
+Time slot   4
+Time slot   5
+	CPU 0: Put process  2 to run queue
+	CPU 0: Dispatched process  2
+[REGION] PID=2 reg=2 mode=kernel range=[ff10000000000000,ff10000000002001)
+[KMALLOC] PID=2 reg=2 VA=ff10000000000000 size=8193
+	CPU 1: Put process  1 to run queue
+	CPU 1: Dispatched process  1
+[REGION] PID=1 reg=2 mode=kernel range=[ff10000000003000,ff10000000005001)
+[KMALLOC] PID=1 reg=2 VA=ff10000000003000 size=8193
+Time slot   6
+Time slot   7
+	CPU 0: Put process  2 to run queue
+	CPU 0: Dispatched process  2
+	CPU 1: Put process  1 to run queue
+	CPU 1: Dispatched process  1
+Time slot   8
+[READ] PID=2 reg=1 offset=4095 value=165
+[READ] PID=1 reg=1 offset=4095 value=165
+Time slot   9
+	CPU 1: Put process  1 to run queue
+	CPU 1: Dispatched process  1
+[READ] PID=1 reg=1 offset=4096 value=254
+	CPU 0: Put process  2 to run queue
+	CPU 0: Dispatched process  2
+[READ] PID=2 reg=1 offset=4096 value=254
+Time slot  10
+0-sys_listsyscall
+17-sys_memmap
+0-sys_listsyscall
+17-sys_memmap
+Time slot  11
+	CPU 1: Put process  1 to run queue
+	CPU 1: Dispatched process  1
+[FREE] PID=1 reg=2 mode=0 range=[ff10000000003000,ff10000000005001)
+region=16386..20480
+	CPU 0: Put process  2 to run queue
+	CPU 0: Dispatched process  2
+[FREE] PID=2 reg=2 mode=0 range=[ff10000000000000,ff10000000002001)
+region=16386..20480
+Time slot  12
+[FREE] PID=1 reg=0 mode=1 range=[0000000000000000,0000000000002001)
+region=0..8193
+region=16386..20480
+[FREE] PID=2 reg=0 mode=1 range=[0000000000000000,0000000000002001)
+region=0..8193
+region=16386..20480
+Time slot  13
+	CPU 0: Put process  2 to run queue
+	CPU 0: Dispatched process  2
+[REGION] PID=2 reg=3 mode=user range=[0000000000000000,0000000000002001) sbrk=0000000000005000
+region=16386..20480
+[ALLOC] PID=2 reg=3 VA=0000000000000000 size=8193
+	CPU 1: Put process  1 to run queue
+	CPU 1: Dispatched process  1
+[REGION] PID=1 reg=3 mode=user range=[0000000000000000,0000000000002001) sbrk=0000000000005000
+region=16386..20480
+[ALLOC] PID=1 reg=3 VA=0000000000000000 size=8193
+Time slot  14
+[READ] PID=2 reg=3 offset=4095 value=0
+[READ] PID=1 reg=3 offset=4095 value=0
+Time slot  15
+	CPU 1: Put process  1 to run queue
+	CPU 1: Dispatched process  1
+[FREE] PID=1 reg=3 mode=1 range=[0000000000000000,0000000000002001)
+region=0..8193
+region=16386..20480
+	CPU 0: Put process  2 to run queue
+	CPU 0: Dispatched process  2
+[FREE] PID=2 reg=3 mode=1 range=[0000000000000000,0000000000002001)
+region=0..8193
+region=16386..20480
+Time slot  16
+[FREE] PID=2 reg=1 mode=1 range=[0000000000002001,0000000000004002)
+region=0..20480
+[FREE] PID=1 reg=1 mode=1 range=[0000000000002001,0000000000004002)
+region=0..20480
+Time slot  17
+	CPU 0: Processed  2 has finished
+  VA=0000000000000000 PTE=90000003 FPN=3
+  VA=0000000000001000 PTE=90000004 FPN=4
+  VA=0000000000002000 PTE=80000005 FPN=5
+  VA=0000000000003000 PTE=90000006 FPN=6
+  VA=0000000000004000 PTE=80000007 FPN=7
+[MM-STATS] PID=2 user PGD=1 P4D=1 PUD=1 PMD=1 PT=1 bytes=20480 peak_bytes=20480 walks=18 pt_access=90 data_access=24588 total=24678
+	CPU 0 stopped
+	CPU 1: Processed  1 has finished
+  VA=0000000000000000 PTE=90000000 FPN=0
+  VA=0000000000001000 PTE=90000001 FPN=1
+  VA=0000000000002000 PTE=80000002 FPN=2
+  VA=0000000000003000 PTE=90000008 FPN=8
+  VA=0000000000004000 PTE=80000009 FPN=9
+[MM-STATS] PID=1 user PGD=1 P4D=1 PUD=1 PMD=1 PT=1 bytes=20480 peak_bytes=20480 walks=18 pt_access=90 data_access=24588 total=24678
+	CPU 1 stopped
+[MM-STATS] PID=0 kernel PGD=1 P4D=0 PUD=0 PMD=0 PT=0 bytes=4096 peak_bytes=20480 walks=8 pt_access=40 data_access=8 total=48

@@ -1,0 +1,90 @@
+% Compile with XeLaTeX (UTF-8). This is the MM contribution, not the whole team report.
+\documentclass[11pt,a4paper]{article}
+\usepackage{fontspec}
+\setmainfont{DejaVu Serif}
+\setmonofont{DejaVu Sans Mono}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{booktabs,longtable,array,amsmath,hyperref}
+\hypersetup{hidelinks}
+\title{Bài tập lớn Hệ điều hành CO2018 -- HK261\\Paging, System Call và User/Kernel Space -- v2}
+\author{Nhóm: \underline{\hspace{4cm}} \\ Thành viên/MSSV: \underline{\hspace{5cm}}}
+\date{}
+\begin{document}
+\raggedright
+\setlength{\parskip}{5pt}
+\maketitle
+\section{Phạm vi và yêu cầu}
+Báo cáo trình bày phần quản lý bộ nhớ của demacOprx dựa trên Assignment -- Simple Operating System, 17/10/2026, mục 1.3, 1.6, 2.2, 2.4 và 3.2--3.3. Hệ thống dùng MM64, page 4096 byte, cây bảng trang 5 cấp, syscall theo PID, vùng nhớ user riêng và kernel chung. Page replacement chưa được giảng viên yêu cầu; khi thiếu frame, cấp phát thất bại an toàn và hoàn tác. Phiên bản v2 giữ nguyên kiểu trả về và tham số của mọi hàm gốc; không thêm tên hàm/API mới. Hàm vm\_map\_kernel đã có prototype trong mm.h và được bổ sung thân hàm. Không trình bày kết quả DMA hay tuyên bố hoàn thành toàn bộ Scheduler; hai phần này cần ghép báo cáo nhóm.
+\section{Kiến trúc và cấu trúc dữ liệu}
+Mỗi PCB có một \texttt{mm\_struct} gồm PGD, VMA và symbol table. Kernel quản lý registry PID, RAM, SWAP và một PGD kernel dùng chung. Region có khoảng nửa mở $[start,end)$ và \texttt{mode\_bit} (1 user, 0 kernel). Free region list được sắp theo địa chỉ và gộp các khoảng liên tiếp. Physical memory có free/used frame list và owner. Kernel region descriptor được lưu theo process chủ, còn mapping nằm trong cây kernel.
+\begin{verbatim}
+CPU -> libmem/libstd -> _syscall(kernel, pid, nr, regs)
+ -> registry lookup -> __sys_memmap
+ -> VMA / region -> MM64 page walk -> MEMPHY
+\end{verbatim}
+\section{Multi-level Paging}
+\begin{center}
+\begin{tabular}{lrr}\toprule
+Thành phần & Bit cao--thấp & Số bit\\\midrule
+PGD & 56--48 & 9\\
+P4D & 47--39 & 9\\
+PUD & 38--30 & 9\\
+PMD & 29--21 & 9\\
+PT & 20--12 & 9\\
+Offset & 11--0 & 12\\\bottomrule
+\end{tabular}
+\end{center}
+Bits 63--57 phải là sign extension của bit 56. Với địa chỉ ví dụ của tài liệu \texttt{0x39ffe1d9c9000}, các index là 0x003, 0x13f, 0x1f8, 0x0ec, 0x1c9. Cấp cuối chứa PTE 32 bit trong slot 64 bit. Nếu PTE present, physical address được tính:
+\[ PA = FPN \times 4096 + (VA\mathbin{\&}\texttt{0xfff}). \]
+PTE bit 31 present, bit 30 swapped, bit 29 reserve, bit 28 dirty, bit 27--15 user-defined numbering (để 0), bit 14--13 zero và bit 12--0 FPN. Swap type/offset được mã hóa theo Figure 6 của tài liệu. Không dùng USR Number làm bit phân quyền. FPN 0 hợp lệ. 13 bit FPN giới hạn RAM ánh xạ $8192\times4096=32$ MiB; config 256 MiB không được cắt bit FPN làm alias.
+
+\texttt{pte\_get\_entry} duyệt bảng con, không tự tạo nhánh. \texttt{pte\_set\_entry} cấp phát động bảng và thu hồi nhánh rỗng khi xóa hoặc lỗi. \texttt{alloc\_pages\_range}, \texttt{vmap\_page\_range} và \texttt{vm\_map\_ram} phối hợp rollback khi thiếu RAM. \texttt{free\_pcb\_memph} duyệt DFS lặp postorder để trả frame và bảng trang, không cần hàm đệ quy mới.
+\subsection{Thống kê và trade-off}
+Flat table 45 bit page number, 4 byte/PTE, cần $2^{45}\times4=128$ TiB. Cây động dùng 512 slot 8 byte/bảng; một đường đầy đủ cần $5\times512\times8=20480$ byte (20 KiB). Bảng gốc trống 4096 byte. Dịch một byte thành công cần 5 lookup PTE và một data access khi không có TLB; copy qua hai cây cần hai phép dịch. Thống kê \texttt{pt\_access} đếm 5 entry cho mỗi lần dịch VA thành công phục vụ truy cập dữ liệu hoặc zero-fill; \texttt{data\_access} đếm byte đọc/ghi và zero-fill vùng user/MAP; không tính host allocator, debug, thao tác metadata tạo PTE hay swap primitive, dirty write-back hoặc kiểm tra thất bại. \texttt{bytes} là storage hiện tại, \texttt{peak\_bytes} là cực đại kể cả allocation rollback. Lợi ích là giảm storage nhánh thưa; chi phí là thêm lookup, cấp phát bảng và lock.
+\section{ALLOC, FREE, READ, WRITE}
+ALLOC kiểm tra symbol và size, first-fit free region. Nếu thiếu, syscall INC map số page cần thiết (round up), cập nhật break sau khi thành công, thêm khoảng free rồi cắt đúng size byte. Ví dụ ALLOC 300 reg 0, ALLOC 100 reg 1, FREE reg 0, ALLOC 100 reg 2 sẽ tái sử dụng VA 0 của reg 0. FREE user chỉ trả region về list vì nhiều region có thể dùng chung page; trả frame khi process kết thúc. READ/WRITE xác thực reg, mode và offset; dịch VA, xác thực owner rồi truy cập RAM thông qua syscall IO. CPU lưu byte READ vào register đích. Log VMA thể hiện các khoảng đang cấp phát và free list.
+\section{System Call và PID passing}
+\texttt{\_syscall(krnl,pid,nr,regs)} giữ lock, tra PID trong registry, dispatch qua bảng sinh từ syscall.tbl. PCB không được truyền qua boundary; handler mới truy cập PCB đã lookup. Syscall 0 liệt kê 0 và 17. Syscall 17 hỗ trợ MAP, INC, SWP, IO READ, IO WRITE và operation 6--12 nội bộ cho region/kalloc/copy. User instruction syscall không có cờ nội bộ, nên không thể yêu cầu raw physical IO. PID sai, syscall không đăng ký và operation sai lần lượt báo ESRCH, ENOSYS và EINVAL. SWP chỉ copy primitive cho frame/slot hợp lệ; không tự động eviction/page-in.
+\section{Tách user/kernel space}
+Mặc định user canonical lower half, kernel base \texttt{0xff00000000000000}; config có thể chỉ định kernel base upper canonical aligned. Mỗi process có cây user riêng, một cây kernel dùng chung. KMALLOC dùng \texttt{vm\_map\_kernel} tìm run FPN liên tiếp rồi map kernel. FREE kernel trả frame ngay. READ/WRITE trực tiếp bị từ chối với kernel region. COPY FROM USER kiểm tra source user, destination kernel; COPY TO USER ngược lại. Validate cả hai range trước khi copy từng byte. Kernel chỉ dùng region thuộc process sở hữu; PTE kernel nhất quán giữa các process.
+\section{Đồng bộ hóa và xử lý lỗi}
+Một recursive mutex GNU/Linux được gọi trực tiếp qua pthread, không thêm hàm wrapper, bảo vệ registry, frame list, PTE, VMA, symbol, COPY và cleanup. Recursive cần thiết vì helper allocation/access gọi syscall INC/IO trong cùng transaction. Không giữ MM lock khi gọi Scheduler hay chờ DMA. Nếu thiếu lock, hai CPU có thể lấy cùng free FPN, dẫn đến alias dữ liệu và hỏng free list. Khi process kết thúc, unregister PID và thu hồi bộ nhớ trước khi free PCB. Timer dùng cùng event lock cho predicate done, atomic thời gian và stop. Giới hạn: serialize MM giảm parallelism; bản đơn giản chưa có TLB, pinning hoặc page replacement.
+\newpage
+\section{Kiểm thử}
+\begin{verbatim}
+make os-mm
+./os-mm os_mm_usr_demo
+make test-mm
+make test-mm \
+  MM_TEST_FLAGS="-g -O1 \
+  -fsanitize=address,undefined \
+  -fno-omit-frame-pointer -no-pie"
+\end{verbatim}
+\begin{longtable}{p{0.09\textwidth}p{0.63\textwidth}p{0.17\textwidth}}
+\toprule Nhóm & Mục tiêu assertion & Kết quả\\\midrule
+1 & Canonical, index 5 cấp, PTE frame 0 và swap encoding & Pass\\
+2 & Alloc nhiều page, qua boundary, dirty, bounds và 5+1 access & Pass\\
+3 & Hai process cùng VA, khác frame, dữ liệu độc lập & Pass\\
+4 & Free, coalesce, first-fit, zero-fill, double free & Pass\\
+5 & Kernel contiguous, shared root, mode, copy hai chiều & Pass\\
+6 & PID sai, syscall lạ, MAP, raw IO bị chặn & Pass\\
+7 & Hết RAM, rollback VMA/frame/symbol & Pass\\
+8 & Nhánh sparse địa chỉ cao, đọc/ghi 64 bit, prune, canonical rejection & Pass\\
+9 & Copy frame sang swap (primitive) & Pass\\
+10 & CPU READ lưu register, từ chối reg 20 & Pass\\
+11 & 4 pthread x 100 vòng, kiểm tra data và thu hồi frame & Pass\\
+12 & RAM phân mảnh, cấp phát liên tục thất bại đúng, không tràn uint32 & Pass\\\bottomrule
+\end{longtable}
+Demo mới có hai CPU và hai process; mỗi PID đọc 165 ở offset 4095, 254 ở offset 4096 sau copy qua kernel; đọc 0 sau tái cấp phát. Không có instruction error. Kernel final root còn 4096 B, peak 20480 B, 8 walks, 40 PT accesses, 8 data accesses, tổng 48 trong demo. Log chi tiết nằm tại tests/results. Cả 12 nhóm assertion và ASan/UBSan đều đạt. Clang AST đối chiếu 98 định nghĩa gốc trong 14 file C chỉnh sửa: 0 hàm bị xóa, 0 prototype đổi, 0 API mới; thêm thân hàm cho vm\_map\_kernel đã khai báo từ đầu. 14 config gốc chạy kết thúc nhưng có instruction lỗi hợp lệ do thiếu RAM, invalid register/region/offset, syscall chưa đăng ký, DMA chưa hiện thực. Full build RTL chưa kiểm chứng vì thiếu verilated.h trong môi trường kiểm thử. Nhóm cần chạy lại trên VM môn học và cập nhật kết quả khi ghép.
+\section{Câu hỏi lý thuyết}
+\paragraph{Unified syscall interface.} ABI thống nhất giúp chuẩn hóa permission, logging và error handling, tăng portability; chi phí dispatch/lock và abstraction có thể làm giảm hiệu quả, thiết bị đặc thù cần operation riêng.
+\paragraph{Long-running syscall.} Giữ CPU/lock lâu làm giảm responsiveness, có thể dùng blocking/wakeup, preemption hoặc asynchronous I/O. Tránh giữ MM lock khi chờ thiết bị.
+\paragraph{Segmentation kết hợp paging.} VMA/region giữ ý nghĩa logic và quyền, paging cho phép các frame không liên tục, giảm external fragmentation của user RAM. Đổi lại có internal fragmentation và page table overhead.
+\paragraph{N-level paging.} Cho phép mở rộng virtual address space và cấp phát nhánh theo nhu cầu. Thêm level tăng lookup cost; TLB có thể giảm overhead.
+\paragraph{Paging và contiguous.} Paging linh hoạt trước RAM phân mảnh và dễ isolation, nhưng phải dịch địa chỉ. Contiguous physical allocation đơn giản cho truy cập tuyến tính/DMA nhưng khó tìm block đủ lớn. Dự án dùng paging user, contiguous kernel theo yêu cầu.
+\paragraph{Thiếu đồng bộ.} Hai CPU có thể lấy một FPN, ghi đè data của nhau, hoặc corrupt list. Mutex bảo đảm lấy frame, cập nhật PTE và symbol là transaction; test 11 kiểm chứng đồng thời.
+\section{Giới hạn prototype và tích hợp}
+Giữ các tham số \texttt{int} hoặc \texttt{uint32\_t} của skeleton. Kiểm tra trước khi ép kiểu; các thao tác region địa chỉ cao dùng hàm gốc nhận \texttt{addr\_t}. Không dùng macro chứa logic thay thế hàm. Scheduler tích hợp sử dụng \texttt{put\_proc} để bỏ process đã kết thúc khỏi running list, không đưa lại vào ready queue. Cần thống nhất với Scheduler của nhóm trước khi merge.
+\section{Kết luận và công việc ghép nhóm}
+Phần MM64, PID passing, VMA, kernel allocation và copy được kiểm thử CPU-only. Giữ Page Replacement ở phạm vi optional; hỗ trợ SWAP primitive nhưng chưa page-fault eviction. Scheduler cần đối chiếu thuật toán nhóm, DMA cần tích hợp bus, pin/lifetime và asynchronous completion trên Verilator. Báo cáo này không thay thế báo cáo toàn bộ BTL.
+\end{document}
